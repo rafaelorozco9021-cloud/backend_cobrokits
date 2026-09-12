@@ -168,7 +168,7 @@ export class AuthService {
       return rows[0];
     } catch (e) {
       const rows: any[] = await this.dataSource.query(
-        `INSERT INTO cobrokits.sellers (name, phone, status, role, password_hash, trial_start, trial_end, subscription_status, plan) VALUES ($1, $2, 'active', $4, $5, $6, $7, $8, $9) RETURNING id, name, phone, status, role`,
+        `INSERT INTO cobrokits.sellers (name, phone, status, role, password_hash, trial_start, trial_end, subscription_status, plan) VALUES ($1, $2, 'active', $3, $4, $5, $6, $7, $8) RETURNING id, name, phone, status, role`,
         [body.name, body.phone || '', role, passwordHash, trialStart.toISOString(), isEmpresaTrial ? trialEnd.toISOString() : null, isEmpresaTrial ? 'trialing' : 'active', isEmpresaTrial ? 'un_mes_gratis' : plan],
       );
       return rows[0];
