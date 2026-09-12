@@ -1,6 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { verify } from 'jsonwebtoken';
+import { getRequestTokens, verifyToken } from '../helpers/auth-tokens.helper';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 
 @Injectable()
@@ -21,24 +21,18 @@ export class JwtAuthGuard implements CanActivate {
       request.headers['x-tenant-schema'] = request.tenant.schema;
     }
 
-    const cookieToken = request.cookies?.token;
-    const authHeader: string | undefined = request.headers?.authorization;
-    let token: string | null = null;
+    const tokens = getRequestTokens(request);
+    if (!tokens.length) throw new UnauthorizedException('No token provided');
 
-    if (cookieToken) token = cookieToken;
-    else if (authHeader?.startsWith('Bearer ')) token = authHeader.substring(7);
-
-    if (!token) throw new UnauthorizedException('No token provided');
-
-    try {
-      const secret = process.env.JWT_SECRET || 'cobrokits-jwt-secret-change-in-production';
-      const payload: any = verify(token, secret);
-      request.user = payload;
-      request.headers['x-user-id'] = payload.userId;
-      request.headers['x-user-role'] = payload.role;
-      return true;
-    } catch {
-      throw new UnauthorizedException('Invalid token');
+    let payload: any = null;
+    for (const t of tokens) {
+      payload = verifyToken(t);
+      if (payload) break;
     }
+    if (!payload) throw new UnauthorizedException('Invalid token');
+    request.user = payload;
+    request.headers['x-user-id'] = payload.userId;
+    request.headers['x-user-role'] = payload.role;
+    return true;
   }
 }

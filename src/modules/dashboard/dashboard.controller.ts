@@ -1,7 +1,7 @@
 import { Controller, Get, Query, Req, UnauthorizedException } from '@nestjs/common';
 import { DashboardService } from './dashboard.service';
 import type { Request } from 'express';
-import { verify } from 'jsonwebtoken';
+import { getRequestTokens, verifyToken } from '../../common/helpers/auth-tokens.helper';
 import { TenantService } from '../tenant/tenant.service';
 
 @Controller('api/dashboard')
@@ -13,19 +13,16 @@ export class DashboardController {
 
   @Get()
   async get(@Query('action') action: string = 'overview', @Req() req: Request) {
-    const cookie = (req as any).cookies?.token;
-    const authHeader = req.headers.authorization;
-    let token: string | null = null;
-    if (cookie) token = cookie;
-    else if (authHeader?.startsWith('Bearer ')) token = authHeader.substring(7);
-    if (!token) throw new UnauthorizedException('No autenticado');
+    // Probar todos los tokens (cookie duplicada vieja + nueva, Bearer)
+    const tokens = getRequestTokens(req);
+    if (!tokens.length) throw new UnauthorizedException('No autenticado');
 
-    let payload: any;
-    try {
-      payload = verify(token, process.env.JWT_SECRET || 'cobrokits-jwt-secret');
-    } catch {
-      throw new UnauthorizedException('Token inválido');
+    let payload: any = null;
+    for (const t of tokens) {
+      payload = verifyToken(t);
+      if (payload) break;
     }
+    if (!payload) throw new UnauthorizedException('Token inválido');
 
     const sellerId = payload.userId;
     const tenant = (req as any).tenant;

@@ -1,28 +1,30 @@
-﻿import { Controller, Get, Post, Patch, Delete, Query, Body, Res, Req, UnauthorizedException } from '@nestjs/common';
+﻿import { Controller, Get, Post, Patch, Delete, Query, Body, Res, Req, Header, UnauthorizedException } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { Public } from '../../common/decorators/public.decorator';
 import type { Response, Request } from 'express';
-import { verify } from 'jsonwebtoken';
+import { getRequestTokens, verifyToken } from '../../common/helpers/auth-tokens.helper';
 
 @Controller('api/auth')
 export class AuthController {
   constructor(private authService: AuthService) {}
 
   @Get('me')
+  @Header('Cache-Control', 'no-store')
   async me(@Req() req: Request) {
-    const cookie = (req as any).cookies?.token;
-    const authHeader = req.headers.authorization;
-    let token: string | null = null;
-    if (cookie) token = cookie;
-    else if (authHeader?.startsWith('Bearer ')) token = authHeader.substring(7);
-    if (!token) throw new UnauthorizedException('No autenticado');
-    let payload: any;
-    try {
-      payload = verify(token, process.env.JWT_SECRET || 'cobrokits-jwt-secret-change-in-production');
-    } catch {
-      throw new UnauthorizedException('Token inválido');
+    // Probar todos los tokens (cookie duplicada vieja + nueva, Bearer).
+    // El primero que verifique Y corresponda a un usuario existente gana.
+    const tokens = getRequestTokens(req);
+    if (!tokens.length) throw new UnauthorizedException('No autenticado');
+    for (const t of tokens) {
+      const payload = verifyToken(t);
+      if (!payload?.userId) continue;
+      try {
+        return await this.authService.me(payload.userId);
+      } catch {
+        continue; // token válido pero usuario inexistente (stale): probar el siguiente
+      }
     }
-    return this.authService.me(payload.userId);
+    throw new UnauthorizedException('Token inválido');
   }
 
   @Get()
@@ -44,6 +46,9 @@ export class AuthController {
     const tenantHost = ((req.headers['x-tenant-host'] as string) || '').toLowerCase();
     const effectiveHost = `${host} ${fwdHost} ${tenantHost}`;
     const isProduction = effectiveHost.includes('cobrokits.online');
+    // Purgar cookie host-only vieja (tokens pre-wipe): document.cookie no puede
+    // borrar HttpOnly, así que se hace aquí. Sin Domain => borra la del host actual.
+    res.cookie('token', '', { httpOnly: true, path: '/', maxAge: 0 });
     res.cookie('token', result.token, {
       httpOnly: true,
       secure: isProduction,
@@ -53,6 +58,15 @@ export class AuthController {
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
     return result;
+  }
+
+  @Public()
+  @Post('logout')
+  async logout(@Res({ passthrough: true }) res: Response) {
+    // Borrar ambas variantes: host-only y de dominio (el frontend no puede, es HttpOnly)
+    res.cookie('token', '', { httpOnly: true, path: '/', maxAge: 0 });
+    res.cookie('token', '', { httpOnly: true, path: '/', domain: '.cobrokits.online', maxAge: 0 });
+    return { success: true };
   }
 
   @Public()
