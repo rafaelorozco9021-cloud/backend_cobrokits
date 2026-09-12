@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Query, Body, Res, Req } from '@nestjs/common';
+﻿import { Controller, Get, Post, Patch, Delete, Query, Body, Res, Req } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { Public } from '../../common/decorators/public.decorator';
 import type { Response, Request } from 'express';
@@ -29,9 +29,10 @@ export class AuthController {
     return result;
   }
 
+  @Public()
   @Post()
-  async create(@Body() body: { name: string; email: string; phone?: string; action?: string; email2?: string; password?: string }) {
-    // Si viene con action=login legacy (desde src/api/auth POST), redirigir lógica
+  async create(@Body() body: { name: string; email: string; phone?: string; action?: string; email2?: string; password?: string; role?: string }) {
+    // Si viene con action=login legacy (desde src/api/auth POST), redirigir lÃ³gica
     if (body.action === 'login') {
       const result = await this.authService.login((body as any).email, (body as any).password);
       return result;
@@ -50,9 +51,10 @@ export class AuthController {
   @Delete()
   async del(@Query('id') id: string) {
     if (id === 'visit') {
-      await this.authService['dataSource'].query('DELETE FROM customer_visits WHERE id = $1', []);
+      await this.authService['dataSource'].query('DELETE FROM cobrokits.customer_visits WHERE id = $1', []);
       return { success: true, message: 'Visita eliminada y stock revertido' };
     }
     return { error: 'ID requerido' };
   }
 }
+

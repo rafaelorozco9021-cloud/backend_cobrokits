@@ -1,3 +1,4 @@
+require('dotenv').config();
 const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
@@ -12,8 +13,6 @@ async function runSetup() {
   const pool = new Pool({
     connectionString: databaseUrl,
     ssl: { rejectUnauthorized: false },
-    search_path: 'cobrokits,public',
-    timezone: 'America/Bogota',
   });
 
   try {

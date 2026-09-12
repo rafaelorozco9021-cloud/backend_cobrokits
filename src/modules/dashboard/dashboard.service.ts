@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+﻿import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 
 @Injectable()
@@ -11,38 +11,110 @@ export class DashboardService {
     const todayDate = bogotaDate.toISOString().split('T')[0];
     const dow = bogotaDate.getDay();
 
-    const target: any[] = await this.dataSource.query(`SELECT get_collection_target($1, $2) as target`, [sellerId, todayDate]);
-    const sellers: any[] = await this.dataSource.query('SELECT id, name, email, status FROM sellers ORDER BY name');
-    const balances: any[] = await this.dataSource.query(
-      `SELECT seller_id, date, total_sales, total_delivered, total_sold, is_closed FROM daily_seller_stock WHERE date = $1`,
-      [todayDate],
-    );
+    // Admin sintético no tiene UUID real -> devolver datos mock sin consultar funciones que requieren uuid
+    const isAdmin = sellerId === 'admin' || !/^[0-9a-f-]{36}$/i.test(sellerId);
+    if (isAdmin) {
+      const sellers: any[] = await this.dataSource.query('SELECT id, name, phone, status FROM cobrokits.sellers ORDER BY name').catch(() => []);
+      const balances: any[] = await this.dataSource.query(
+        `SELECT seller_id, date, total_sales, total_delivered, total_sold, is_closed FROM cobrokits.daily_seller_stock WHERE date = $1`,
+        [todayDate],
+      ).catch(() => []);
+      return {
+        today_date: todayDate,
+        dow,
+        collection_target: 0,
+        sellers,
+        balances,
+        week: [],
+        lowStock: [],
+        note: 'Admin mode - sin seller UUID real, datos parciales',
+      };
+    }
+
+    // Detectar rol empresa
+    let role: string | null = null;
+    try {
+      const r: any[] = await this.dataSource.query(`SELECT role FROM cobrokits.sellers WHERE id = $1`, [sellerId]);
+      role = r[0]?.role || null;
+    } catch {}
+    const isEmpresa = role === 'empresa';
+
+    // Si es empresa, agregar todos sus vendedores
+    let targetSellerIds: string[] = [sellerId];
+    if (isEmpresa) {
+      const vends: any[] = await this.dataSource.query(`SELECT id FROM cobrokits.sellers WHERE empresa_id = $1`, [sellerId]);
+      targetSellerIds = vends.map((v) => v.id);
+      if (targetSellerIds.length === 0) targetSellerIds = [sellerId];
+    }
+
+    const target: any[] = isEmpresa
+      ? await this.dataSource.query(
+          `SELECT COALESCE(SUM(cobrokits.get_collection_target(sid, $2)),0) as target FROM unnest($1::uuid[]) as sid`,
+          [targetSellerIds, todayDate],
+        )
+      : await this.dataSource.query(`SELECT cobrokits.get_collection_target($1, $2) as target`, [sellerId, todayDate]);
+
+    const sellers: any[] = isEmpresa
+      ? await this.dataSource.query('SELECT id, name, email, status, role, empresa_id FROM cobrokits.sellers WHERE empresa_id = $1 OR id = $1 ORDER BY name', [sellerId])
+      : await this.dataSource.query('SELECT id, name, email, status, role, empresa_id FROM cobrokits.sellers WHERE empresa_id = (SELECT empresa_id FROM cobrokits.sellers WHERE id=$1) OR id = (SELECT empresa_id FROM cobrokits.sellers WHERE id=$1) ORDER BY name', [sellerId]);
+
+    // Balances: para empresa, solo sus vendedores; para vendedor, global o solo suyo? Mantenemos global para compatibilidad pero filtramos si es empresa
+    const balances: any[] = isEmpresa
+      ? await this.dataSource.query(
+          `SELECT seller_id, date, total_sales, total_delivered, total_sold, is_closed FROM cobrokits.daily_seller_stock WHERE seller_id = ANY($1::uuid[]) AND date = $2`,
+          [targetSellerIds, todayDate],
+        )
+      : await this.dataSource.query(
+          `SELECT seller_id, date, total_sales, total_delivered, total_sold, is_closed FROM cobrokits.daily_seller_stock WHERE date = $1`,
+          [todayDate],
+        );
 
     const weekStart = new Date(bogotaDate);
     weekStart.setDate(bogotaDate.getDate() - bogotaDate.getDay());
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekEnd.getDate() + 6);
 
-    const weekData: any[] = await this.dataSource.query(
-      `SELECT 
-        d.date,
-        COALESCE(SUM(p.amount) FILTER (WHERE p.payment_method = 'efectivo'), 0) as efectivo,
-        COALESCE(SUM(p.amount) FILTER (WHERE p.payment_method = 'nequi'), 0) as nequi,
-        COALESCE(SUM(p.amount) FILTER (WHERE p.payment_method = 'transferencia'), 0) as transferencia,
-        COALESCE(SUM(p.amount) FILTER (WHERE p.payment_method = 'tarjeta'), 0) as tarjeta,
-        COALESCE(SUM(p.amount), 0) as total_entrega
-       FROM daily_seller_stock d
-       LEFT JOIN payments p ON p.seller_id = d.seller_id AND p.created_at::date = d.date
-       WHERE d.seller_id = $1 AND d.date BETWEEN $2 AND $3
-       GROUP BY d.date
-       ORDER BY d.date`,
-      [sellerId, weekStart.toISOString(), weekEnd.toISOString()],
-    );
+    const weekData: any[] = isEmpresa
+      ? await this.dataSource.query(
+          `SELECT 
+            d.date,
+            COALESCE(SUM(p.amount) FILTER (WHERE p.payment_method = 'efectivo'), 0) as efectivo,
+            COALESCE(SUM(p.amount) FILTER (WHERE p.payment_method = 'nequi'), 0) as nequi,
+            COALESCE(SUM(p.amount) FILTER (WHERE p.payment_method = 'transferencia'), 0) as transferencia,
+            COALESCE(SUM(p.amount) FILTER (WHERE p.payment_method = 'tarjeta'), 0) as tarjeta,
+            COALESCE(SUM(p.amount), 0) as total_entrega
+           FROM cobrokits.daily_seller_stock d
+            LEFT JOIN cobrokits.payments p ON p.seller_id = d.seller_id AND p.created_at::date = d.date
+            WHERE d.seller_id = ANY($1::uuid[]) AND d.date BETWEEN $2 AND $3
+            GROUP BY d.date
+            ORDER BY d.date`,
+          [targetSellerIds, weekStart.toISOString(), weekEnd.toISOString()],
+        )
+      : await this.dataSource.query(
+          `SELECT 
+            d.date,
+            COALESCE(SUM(p.amount) FILTER (WHERE p.payment_method = 'efectivo'), 0) as efectivo,
+            COALESCE(SUM(p.amount) FILTER (WHERE p.payment_method = 'nequi'), 0) as nequi,
+            COALESCE(SUM(p.amount) FILTER (WHERE p.payment_method = 'transferencia'), 0) as transferencia,
+            COALESCE(SUM(p.amount) FILTER (WHERE p.payment_method = 'tarjeta'), 0) as tarjeta,
+            COALESCE(SUM(p.amount), 0) as total_entrega
+           FROM cobrokits.daily_seller_stock d
+            LEFT JOIN cobrokits.payments p ON p.seller_id = d.seller_id AND p.created_at::date = d.date
+            WHERE d.seller_id = $1 AND d.date BETWEEN $2 AND $3
+            GROUP BY d.date
+            ORDER BY d.date`,
+          [sellerId, weekStart.toISOString(), weekEnd.toISOString()],
+        );
 
-    const lowStock: any[] = await this.dataSource.query(
-      `SELECT si.product_id, p.name, si.quantity, si.cost_price FROM seller_inventory si JOIN products p ON si.product_id = p.id WHERE si.seller_id = $1 AND si.quantity <= 5`,
-      [sellerId],
-    );
+    const lowStock: any[] = isEmpresa
+      ? await this.dataSource.query(
+          `SELECT si.product_id, p.name, si.quantity, si.cost_price, si.seller_id FROM cobrokits.seller_inventory si JOIN cobrokits.products p ON si.product_id = p.id WHERE si.seller_id = ANY($1::uuid[]) AND si.quantity <= 5`,
+          [targetSellerIds],
+        )
+      : await this.dataSource.query(
+          `SELECT si.product_id, p.name, si.quantity, si.cost_price FROM cobrokits.seller_inventory si JOIN cobrokits.products p ON si.product_id = p.id WHERE si.seller_id = $1 AND si.quantity <= 5`,
+          [sellerId],
+        );
 
     return {
       today_date: todayDate,
@@ -56,6 +128,11 @@ export class DashboardService {
   }
 
   async sellers() {
-    return this.dataSource.query('SELECT id, name, email, phone, status FROM sellers ORDER BY name');
+    try {
+      return await this.dataSource.query('SELECT id, name, email, phone, status FROM cobrokits.sellers ORDER BY name');
+    } catch {
+      return this.dataSource.query('SELECT id, name, phone, status FROM cobrokits.sellers ORDER BY name');
+    }
   }
 }
+

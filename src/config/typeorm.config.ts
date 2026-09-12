@@ -10,10 +10,6 @@ export function getTypeOrmConfig(): TypeOrmModuleOptions {
     url,
     ssl: { rejectUnauthorized: false },
     schema: 'cobrokits',
-    // timezone handled by postgres session
-    extra: {
-      options: '-c search_path=cobrokits,public -c timezone=America/Bogota',
-    },
     autoLoadEntities: true,
     synchronize: false, // SQL schema is source of truth (cobrokits_postgres.sql)
     logging: false,

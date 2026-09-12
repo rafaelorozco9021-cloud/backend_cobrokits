@@ -2,7 +2,8 @@
 -- CobroKits PostgreSQL Database Setup
 -- ============================================================
 
--- Set search_path and timezone
+-- Create schema if not exists and set search_path
+CREATE SCHEMA IF NOT EXISTS cobrokits;
 SET search_path TO cobrokits,public;
 SET timezone = 'America/Bogota';
 
@@ -197,8 +198,8 @@ SELECT
   COALESCE(SUM(p.amount) FILTER (WHERE p.payment_method = 'tarjeta'), 0) as tarjeta
 FROM sellers s
 LEFT JOIN daily_seller_stock d ON s.id = d.seller_id
-LEFT JOIN payments p ON p.seller_id = s.id
-GROUP BY s.id, s.name, d.date, d.is_closed;
+LEFT JOIN payments p ON p.seller_id = s.id AND p.created_at::date = d.date
+GROUP BY s.id, s.name, d.date, d.total_sales, d.total_delivered, d.total_sold, d.is_closed;
 
 -- v_dashboard_totals
 CREATE OR REPLACE VIEW v_dashboard_totals AS
@@ -496,24 +497,24 @@ $$ LANGUAGE plpgsql STRICT;
 -- Indexes
 -- ============================================================
 
-CREATE INDEX idx_sellers_email ON public.sellers(email);
-CREATE INDEX idx_products_seller ON public.products(seller_id);
-CREATE INDEX idx_customers_phone ON public.customers(phone);
-CREATE INDEX idx_cobro_sellers_seller ON public.cobro_sellers(seller_id);
-CREATE INDEX idx_seller_inventory_seller ON public.seller_inventory(seller_id);
-CREATE INDEX idx_seller_inventory_product ON public.seller_inventory(product_id);
-CREATE INDEX idx_inventory_movements_seller ON public.inventory_movements(seller_id);
-CREATE INDEX idx_inventory_movements_product ON public.inventory_movements(product_id);
-CREATE INDEX idx_customer_visits_seller ON public.customer_visits(seller_id);
-CREATE INDEX idx_customer_visits_date ON public.customer_visits(visit_date);
-CREATE INDEX idx_visit_items_visit ON public.customer_visit_items(visit_id);
-CREATE INDEX idx_payments_seller ON public.payments(seller_id);
-CREATE INDEX idx_payments_method ON public.payments(payment_method);
-CREATE INDEX idx_daily_seller_stock_seller_date ON public.daily_seller_stock(seller_id, date);
-CREATE INDEX idx_warehouse_stock_product ON public.warehouse_stock(product_id);
-CREATE INDEX idx_warehouse_stock_entries_product ON public.warehouse_stock_entries(product_id);
-CREATE INDEX idx_daily_seller_entries_seller ON public.daily_seller_entries(seller_id);
-CREATE INDEX idx_daily_seller_entries_date ON public.daily_seller_entries(date);
+CREATE INDEX idx_sellers_email ON cobrokits.sellers(email);
+CREATE INDEX idx_products_seller ON cobrokits.products(seller_id);
+CREATE INDEX idx_customers_phone ON cobrokits.customers(phone);
+CREATE INDEX idx_cobro_sellers_seller ON cobrokits.cobro_sellers(seller_id);
+CREATE INDEX idx_seller_inventory_seller ON cobrokits.seller_inventory(seller_id);
+CREATE INDEX idx_seller_inventory_product ON cobrokits.seller_inventory(product_id);
+CREATE INDEX idx_inventory_movements_seller ON cobrokits.inventory_movements(seller_id);
+CREATE INDEX idx_inventory_movements_product ON cobrokits.inventory_movements(product_id);
+CREATE INDEX idx_customer_visits_seller ON cobrokits.customer_visits(seller_id);
+CREATE INDEX idx_customer_visits_date ON cobrokits.customer_visits(visit_date);
+CREATE INDEX idx_visit_items_visit ON cobrokits.customer_visit_items(visit_id);
+CREATE INDEX idx_payments_seller ON cobrokits.payments(seller_id);
+CREATE INDEX idx_payments_method ON cobrokits.payments(payment_method);
+CREATE INDEX idx_daily_seller_stock_seller_date ON cobrokits.daily_seller_stock(seller_id, date);
+CREATE INDEX idx_warehouse_stock_product ON cobrokits.warehouse_stock(product_id);
+CREATE INDEX idx_warehouse_stock_entries_product ON cobrokits.warehouse_stock_entries(product_id);
+CREATE INDEX idx_daily_seller_entries_seller ON cobrokits.daily_seller_entries(seller_id);
+CREATE INDEX idx_daily_seller_entries_date ON cobrokits.daily_seller_entries(date);
 
 GRANT ALL ON ALL TABLES IN SCHEMA cobrokits TO public;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA cobrokits TO public;

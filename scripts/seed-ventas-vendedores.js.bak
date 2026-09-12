@@ -1,0 +1,116 @@
+require('dotenv').config();
+const { Pool } = require('pg');
+
+async function run() {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  await pool.query('SET search_path TO cobrokits,public');
+  await pool.query("SET timezone = 'America/Bogota'");
+  console.log('🛒 Creando 3 ventas por vendedor con productos demo...');
+
+  // Vendedores activos con rol seller (demo) + vendedores legacy sin rol
+  const sellersRes = await pool.query(`
+    SELECT id, name, email, role FROM sellers
+    WHERE status='active' AND (role='seller' OR role IS NULL)
+    ORDER BY name
+  `);
+  // Excluir empresas si por error tienen role null? Filtrar solo vendedores demo + Juan/Maria
+  // Si quieres solo los 9 demo, descomenta siguiente linea:
+  // const sellers = sellersRes.rows.filter(s => s.email.includes('@demo.cobrokits'));
+  const sellers = sellersRes.rows.filter(s => s.role === 'seller' || s.email.includes('@demo.cobrokits') || ['juan@cobrokits.com','maria@cobrokits.com'].includes(s.email));
+  console.log(`  Vendedores encontrados: ${sellers.length}`);
+  sellers.forEach(s=> console.log(`   - ${s.name} (${s.email}) role:${s.role}`));
+
+  const productsRes = await pool.query(`SELECT id, name, price, cost_price, category FROM products WHERE sku LIKE 'DEMO-%' ORDER BY sku`);
+  let products = productsRes.rows;
+  if (products.length === 0) {
+    products = (await pool.query(`SELECT id, name, price FROM products LIMIT 20`)).rows;
+  }
+  console.log(`  Productos disponibles: ${products.length}`);
+
+  const customersRes = await pool.query(`SELECT id, name, seller_id FROM customers WHERE email LIKE '%@demo.cobrokits'`);
+  console.log(`  Clientes demo: ${customersRes.rows.length}`);
+
+  const methods = ['efectivo','nequi','transferencia','tarjeta'];
+
+  let totalVentas = 0;
+  for (const seller of sellers) {
+    const sellerCustomers = customersRes.rows.filter(c => c.seller_id === seller.id);
+    const customerPool = sellerCustomers.length > 0 ? sellerCustomers : customersRes.rows;
+    if (customerPool.length === 0) {
+      console.warn(`   ⚠ ${seller.name} sin clientes, saltando`);
+      continue;
+    }
+
+    for (let vi = 0; vi < 3; vi++) {
+      // Fecha aleatoria últimos 7 días
+      const daysAgo = Math.floor(Math.random()*7); // 0-6
+      const date = new Date();
+      date.setDate(date.getDate() - daysAgo);
+      // hora aleatoria 9-17
+      date.setHours(9 + Math.floor(Math.random()*8), Math.floor(Math.random()*60), 0, 0);
+      const visitDay = date.getDay(); // 0-6 Domingo=0
+      const dateOnly = date.toISOString().split('T')[0];
+
+      // Asegurar daily_seller_stock
+      await pool.query(`INSERT INTO daily_seller_stock (seller_id, date, is_closed) VALUES ($1,$2::date,FALSE) ON CONFLICT (seller_id, date) DO NOTHING`, [seller.id, dateOnly]);
+
+      // Cliente aleatorio de ese vendedor
+      const customer = customerPool[Math.floor(Math.random()*customerPool.length)];
+
+      // Productos aleatorios 1-3 por venta
+      const numItems = 1 + Math.floor(Math.random()*3);
+      const shuffled = [...products].sort(()=>0.5-Math.random()).slice(0, numItems);
+      const items = shuffled.map(p=>{
+        const qty = 1 + Math.floor(Math.random()*3); // 1-3
+        const unit = Number(p.price);
+        return { product_id: p.id, quantity: qty, unit_price: unit, product_name: p.name, cost: Number(p.cost_price || unit*0.75) };
+      });
+      const total = items.reduce((a,it)=> a + it.quantity*it.unit_price, 0);
+      const method = methods[Math.floor(Math.random()*methods.length)];
+
+      // Crear customer_visit
+      const visitRes = await pool.query(`INSERT INTO customer_visits (seller_id, visit_date, visit_day, is_closed) VALUES ($1,$2,$3,FALSE) RETURNING id`, [seller.id, date.toISOString(), visitDay]);
+      const visitId = visitRes.rows[0].id;
+
+      // Crear items
+      for (const it of items) {
+        await pool.query(`INSERT INTO customer_visit_items (visit_id, product_id, quantity, unit_price) VALUES ($1,$2,$3,$4)`, [visitId, it.product_id, it.quantity, it.unit_price]);
+        // Actualizar seller_inventory (restar stock, si no existe crearlo)
+        await pool.query(`INSERT INTO seller_inventory (seller_id, product_id, quantity, cost_price) VALUES ($1,$2,0,$3) ON CONFLICT (seller_id, product_id) DO NOTHING`, [seller.id, it.product_id, it.cost]);
+        // Descontar (no permitir negativo, pero si hay poco stock lo dejamos en 0 para demo)
+        await pool.query(`UPDATE seller_inventory SET quantity = GREATEST(0, quantity - $3), updated_at = NOW() WHERE seller_id=$1 AND product_id=$2`, [seller.id, it.product_id, it.quantity]);
+        // Movimiento inventario
+        await pool.query(`INSERT INTO inventory_movements (seller_id, product_id, type, quantity, previous_quantity, new_quantity, reason) VALUES ($1,$2,'exit',$3,0,0,$4)`, [seller.id, it.product_id, it.quantity, `Venta ${visitId.slice(0,8)} - ${it.product_name}`]);
+      }
+
+      // Crear payment
+      await pool.query(`INSERT INTO payments (seller_id, customer_id, visit_id, amount, payment_method, status, notes) VALUES ($1,$2,$3,$4,$5,'completed',$6)`, [seller.id, customer.id, visitId, total, method, `Venta ${items.length} productos - ${customer.name}`]);
+
+      // Actualizar daily_seller_stock totales
+      await pool.query(`UPDATE daily_seller_stock SET total_sales = COALESCE(total_sales,0)+$3, total_delivered = COALESCE(total_delivered,0)+$3, total_sold = COALESCE(total_sold,0)+$4, updated_at=NOW() WHERE seller_id=$1 AND date=$2::date`, [seller.id, dateOnly, total, items.reduce((a,it)=>a+it.quantity,0)]);
+
+      // Daily entry
+      await pool.query(`INSERT INTO daily_seller_entries (seller_id, date, entry_type, amount, payment_method, notes) VALUES ($1,$2::date,'cobro',$3,$4,$5)`, [seller.id, dateOnly, total, method, `Venta ${visitId.slice(0,8)}`]);
+
+      totalVentas++;
+      console.log(`  ✓ ${seller.name} | ${dateOnly} | ${customer.name} | ${items.map(i=> `${i.product_name} x${i.quantity}`).join(', ')} | $${total.toLocaleString()} ${method}`);
+    }
+  }
+
+  console.log(`\n✅ Ventas creadas: ${totalVentas}`);
+  const counts = await pool.query(`
+    SELECT 'customer_visits' as tabla, count(*)::int as total FROM customer_visits WHERE seller_id IN (SELECT id FROM sellers WHERE email LIKE '%@demo.cobrokits' OR email IN ('juan@cobrokits.com','maria@cobrokits.com'))
+    UNION ALL SELECT 'payments', count(*)::int FROM payments WHERE seller_id IN (SELECT id FROM sellers WHERE email LIKE '%@demo.cobrokits' OR email IN ('juan@cobrokits.com','maria@cobrokits.com'))
+    UNION ALL SELECT 'visit_items', count(*)::int FROM customer_visit_items WHERE visit_id IN (SELECT id FROM customer_visits WHERE seller_id IN (SELECT id FROM sellers WHERE email LIKE '%@demo.cobrokits'))
+  `);
+  console.table(counts.rows);
+
+  // Verificación dashboard ahora debe mostrar datos
+  const bal = await pool.query(`SELECT seller_id, date, total_sales FROM daily_seller_stock WHERE date = CURRENT_DATE ORDER BY total_sales DESC LIMIT 5`);
+  console.log('\n📊 Balances hoy:');
+  console.table(bal.rows);
+
+  await pool.end();
+}
+
+run().catch(e=>{ console.error('❌ Error ventas', e); process.exit(1)});

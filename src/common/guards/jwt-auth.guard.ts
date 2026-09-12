@@ -14,7 +14,12 @@ export class JwtAuthGuard implements CanActivate {
     ]);
     if (isPublic) return true;
 
-    const request = context.switchToHttp().getRequest();
+    const request: any = context.switchToHttp().getRequest();
+    // Tenant ya resuelto por TenantMiddleware (req.tenant) - propagation para helpers legacy
+    if (request.tenant?.empresaId) {
+      request.headers['x-tenant-id'] = request.tenant.empresaId;
+      request.headers['x-tenant-schema'] = request.tenant.schema;
+    }
 
     const cookieToken = request.cookies?.token;
     const authHeader: string | undefined = request.headers?.authorization;

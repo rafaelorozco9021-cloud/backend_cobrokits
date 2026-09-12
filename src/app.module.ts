@@ -1,9 +1,11 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD } from '@nestjs/core';
 import { getTypeOrmConfig } from './config/typeorm.config';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { HealthController } from './modules/health/health.controller';
+import { TenantModule } from './modules/tenant/tenant.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { SellersModule } from './modules/sellers/sellers.module';
@@ -20,6 +22,7 @@ import { DailyReportModule } from './modules/daily-report/daily-report.module';
 import { WeeklyReportModule } from './modules/weekly-report/weekly-report.module';
 import { MonthlyReportModule } from './modules/monthly-report/monthly-report.module';
 import { SellerReportModule } from './modules/seller-report/seller-report.module';
+import { AdminModule } from './modules/admin/admin.module';
 import {
   Seller,
   Product,
@@ -36,6 +39,7 @@ import {
 
 @Module({
   imports: [
+    ScheduleModule.forRoot(),
     TypeOrmModule.forRoot({
       ...getTypeOrmConfig(),
       entities: [
@@ -52,6 +56,7 @@ import {
         InventoryMovement,
       ],
     }),
+    TenantModule,
     AuthModule,
     DashboardModule,
     SellersModule,
@@ -68,6 +73,7 @@ import {
     WeeklyReportModule,
     MonthlyReportModule,
     SellerReportModule,
+    AdminModule,
   ],
   controllers: [HealthController],
   providers: [

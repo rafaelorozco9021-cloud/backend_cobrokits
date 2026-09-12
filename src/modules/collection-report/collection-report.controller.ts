@@ -1,4 +1,5 @@
-﻿import { Controller, Get, Post, Patch, Delete, Query, Body } from '@nestjs/common';
+﻿import { Controller, Get, Post, Patch, Delete, Query, Body, Req } from '@nestjs/common';
+import { getEmpresaIdForUser, getUserIdFromRequest, getTargetSellerIds } from '../../common/helpers/empresa.helper';
 import { DataSource } from 'typeorm';
 
 @Controller('api/collection-report')
@@ -6,12 +7,22 @@ export class CollectionReportController {
   constructor(private dataSource: DataSource) {}
 
   @Get()
-  async list(@Query('sellerId') sellerId?: string) {
+  async list(@Query('sellerId') sellerId?: string, @Req() req?: any) {
     try {
-      if (sellerId) {
-        return this.dataSource.query('SELECT * FROM payments WHERE seller_id = $1 ORDER BY created_at DESC LIMIT 100', [sellerId]);
+      const userId = getUserIdFromRequest(req || {});
+      const empresaId = await getEmpresaIdForUser(this.dataSource, userId as string);
+      if (empresaId) {
+        const allowed = await getTargetSellerIds(this.dataSource, userId as string);
+        if (sellerId) {
+          if (!allowed.includes(sellerId)) return [];
+          return this.dataSource.query('SELECT * FROM cobrokits.payments WHERE seller_id = $1 ORDER BY created_at DESC LIMIT 100', [sellerId]);
+        }
+        return this.dataSource.query('SELECT * FROM cobrokits.payments WHERE seller_id = ANY($1::uuid[]) ORDER BY created_at DESC LIMIT 100', [allowed]);
       }
-      return this.dataSource.query('SELECT * FROM payments ORDER BY created_at DESC LIMIT 100');
+      if (sellerId) {
+        return this.dataSource.query('SELECT * FROM cobrokits.payments WHERE seller_id = $1 ORDER BY created_at DESC LIMIT 100', [sellerId]);
+      }
+      return this.dataSource.query('SELECT * FROM cobrokits.payments ORDER BY created_at DESC LIMIT 100');
     } catch (e) {
       return { stub: true, module: 'collection-report', table: 'payments', message: 'Tabla no inicializada o sin datos', error: (e as Error).message };
     }
@@ -30,10 +41,11 @@ export class CollectionReportController {
   @Delete()
   async remove(@Query('id') id: string) {
     try {
-      if (id) await this.dataSource.query('DELETE FROM payments WHERE id = $1', [id]);
+      if (id) await this.dataSource.query('DELETE FROM cobrokits.payments WHERE id = $1', [id]);
       return { success: true, id };
     } catch (e) {
       return { stub: true, error: (e as Error).message };
     }
   }
 }
+

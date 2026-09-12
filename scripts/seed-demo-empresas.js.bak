@@ -1,0 +1,211 @@
+require('dotenv').config();
+const { Pool } = require('pg');
+const bcrypt = require('bcryptjs');
+
+async function run() {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  await pool.query('SET search_path TO cobrokits,public');
+  await pool.query("SET timezone = 'America/Bogota'");
+
+  console.log('🔧 Verificando esquema...');
+
+  // Agregar columnas faltantes si no existen
+  await pool.query(`
+    ALTER TABLE sellers ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255);
+    ALTER TABLE sellers ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'seller';
+    ALTER TABLE sellers ADD COLUMN IF NOT EXISTS empresa_id UUID REFERENCES sellers(id);
+  `).catch(e=> console.log('sellers alter warn', e.message));
+
+  await pool.query(`
+    ALTER TABLE customers ADD COLUMN IF NOT EXISTS seller_id UUID REFERENCES sellers(id);
+    ALTER TABLE customers ADD COLUMN IF NOT EXISTS empresa_id UUID REFERENCES sellers(id);
+  `).catch(e=> console.log('customers alter warn', e.message));
+
+  await pool.query(`
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS cost_price NUMERIC(14,2) DEFAULT 0;
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS category VARCHAR(100);
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS stock INTEGER DEFAULT 0;
+    ALTER TABLE products ADD COLUMN IF NOT EXISTS sku VARCHAR(50);
+  `).catch(e=> console.log('products alter warn', e.message));
+
+  // Limpiar demo previo (solo demo emails)
+  console.log('🧹 Limpiando demo previo...');
+  await pool.query(`DELETE FROM payments WHERE visit_id IN (SELECT id FROM customer_visits WHERE seller_id IN (SELECT id FROM sellers WHERE email LIKE '%@demo.cobrokits%'))`);
+  await pool.query(`DELETE FROM customer_visit_items WHERE visit_id IN (SELECT id FROM customer_visits WHERE seller_id IN (SELECT id FROM sellers WHERE email LIKE '%@demo.cobrokits%'))`);
+  await pool.query(`DELETE FROM customer_visits WHERE seller_id IN (SELECT id FROM sellers WHERE email LIKE '%@demo.cobrokits%')`);
+  await pool.query(`DELETE FROM payments WHERE seller_id IN (SELECT id FROM sellers WHERE email LIKE '%@demo.cobrokits%')`);
+  await pool.query(`DELETE FROM inventory_movements WHERE seller_id IN (SELECT id FROM sellers WHERE email LIKE '%@demo.cobrokits%')`);
+  await pool.query(`DELETE FROM seller_inventory WHERE seller_id IN (SELECT id FROM sellers WHERE email LIKE '%@demo.cobrokits%')`);
+  await pool.query(`DELETE FROM daily_seller_stock WHERE seller_id IN (SELECT id FROM sellers WHERE email LIKE '%@demo.cobrokits%')`);
+  await pool.query(`DELETE FROM daily_seller_entries WHERE seller_id IN (SELECT id FROM sellers WHERE email LIKE '%@demo.cobrokits%')`);
+  await pool.query(`DELETE FROM cobro_sellers WHERE seller_id IN (SELECT id FROM sellers WHERE email LIKE '%@demo.cobrokits%')`);
+  await pool.query(`DELETE FROM cobros WHERE seller_id IN (SELECT id FROM sellers WHERE email LIKE '%@demo.cobrokits%')`);
+  await pool.query(`DELETE FROM warehouse_stock_entries WHERE product_id IN (SELECT id FROM products WHERE sku LIKE 'DEMO-%')`);
+  await pool.query(`DELETE FROM warehouse_stock WHERE product_id IN (SELECT id FROM products WHERE sku LIKE 'DEMO-%')`);
+  await pool.query(`DELETE FROM products WHERE sku LIKE 'DEMO-%'`);
+  await pool.query(`DELETE FROM customers WHERE seller_id IN (SELECT id FROM sellers WHERE email LIKE '%@demo.cobrokits%') OR email LIKE '%@demo.cobrokits%'`);
+  await pool.query(`DELETE FROM sellers WHERE email LIKE '%@demo.cobrokits%'`);
+
+  console.log('🏢 Creando 3 empresas propietarias...');
+
+  const empresas = [
+    { name: 'Distribuidora La Esperanza', email: 'esperanza@demo.cobrokits', phone: '3001110001', pass: 'Esperanza2026!' },
+    { name: 'Lácteos y Embutidos del Valle', email: 'valle@demo.cobrokits', phone: '3001110002', pass: 'Valle2026!' },
+    { name: 'Frutos & Sabores SAS', email: 'sabores@demo.cobrokits', phone: '3001110003', pass: 'Sabores2026!' },
+  ];
+
+  const empresaIds = [];
+  for (const emp of empresas) {
+    const hash = await bcrypt.hash(emp.pass, 10);
+    const res = await pool.query(
+      `INSERT INTO sellers (name, email, phone, status, password_hash, role) VALUES ($1,$2,$3,'active',$4,'empresa') RETURNING id`,
+      [emp.name, emp.email, emp.phone, hash]
+    );
+    empresaIds.push({ ...emp, id: res.rows[0].id, hash });
+    console.log(`  ✓ ${emp.name} -> ${emp.email} / ${emp.pass} (${res.rows[0].id.slice(0,8)})`);
+  }
+
+  console.log('\n👥 Creando 9 vendedores (3 por empresa)...');
+  const vendedoresData = [];
+  // 3 por empresa
+  const vendedorNombres = [
+    ['Carlos Méndez', 'Ana Rojas', 'Jorge Pérez'],
+    ['María Gómez', 'Luis Torres', 'Sofia Herrera'],
+    ['Pedro Ruiz', 'Camila Ortiz', 'Andrés Molina'],
+  ];
+  for (let ei = 0; ei < empresaIds.length; ei++) {
+    const empresa = empresaIds[ei];
+    const nombres = vendedorNombres[ei];
+    for (let vi = 0; vi < nombres.length; vi++) {
+      const nombre = nombres[vi];
+      const email = `vendedor${ei+1}${vi+1}@demo.cobrokits`;
+      const pass = `Vendedor${ei+1}${vi+1}*2026`;
+      const phone = `30022${ei+1}${vi+1}00${Math.floor(Math.random()*9)}`;
+      const hash = await bcrypt.hash(pass, 10);
+      const res = await pool.query(
+        `INSERT INTO sellers (name, email, phone, status, password_hash, role, empresa_id) VALUES ($1,$2,$3,'active',$4,'seller',$5) RETURNING id`,
+        [nombre, email, phone, hash, empresa.id]
+      );
+      const id = res.rows[0].id;
+      vendedoresData.push({ empresa, nombre, email, pass, id, hash });
+      // cobro_sellers link
+      await pool.query(`INSERT INTO cobro_sellers (seller_id, cobro_name, commission_percentage) VALUES ($1,$2,$3)`, [id, `Ruta ${ei+1}-${vi+1}`, (5 + Math.random()*10).toFixed(2)]);
+      // daily stock today
+      await pool.query(`INSERT INTO daily_seller_stock (seller_id, date, is_closed) VALUES ($1, CURRENT_DATE, FALSE) ON CONFLICT (seller_id, date) DO NOTHING`, [id]);
+      console.log(`  ✓ ${nombre} (${email} / ${pass}) -> empresa ${empresa.name} id ${id.slice(0,8)}`);
+    }
+  }
+
+  console.log('\n🧀 Creando 20 productos (embutidos / lácteos / frutos secos)...');
+  const productos = [
+    // Embutidos 8
+    { name: 'Salchichón Premium 1kg', cat: 'embutidos', cost: 18500, price: 23500, desc: 'Salchichón ahumado premium' },
+    { name: 'Chorizo Artesanal 500g', cat: 'embutidos', cost: 12200, price: 16500, desc: 'Chorizo criollo artesanal' },
+    { name: 'Jamón Serrano 250g', cat: 'embutidos', cost: 21000, price: 27500, desc: 'Jamón curado estilo serrano' },
+    { name: 'Salami Milano 400g', cat: 'embutidos', cost: 16800, price: 21900, desc: 'Salami italiano Milano' },
+    { name: 'Mortadela Bologna 1kg', cat: 'embutidos', cost: 9800, price: 13500, desc: 'Mortadela bologna suave' },
+    { name: 'Pepperoni 300g', cat: 'embutidos', cost: 14300, price: 18900, desc: 'Pepperoni picante en rodajas' },
+    { name: 'Longaniza Criolla 500g', cat: 'embutidos', cost: 11500, price: 15200, desc: 'Longaniza criolla tradicional' },
+    { name: 'Tocino Ahumado 250g', cat: 'embutidos', cost: 13200, price: 17800, desc: 'Tocino ahumado premium' },
+    // Lácteos 7
+    { name: 'Queso Doble Crema 1kg', cat: 'lacteos', cost: 14500, price: 19500, desc: 'Queso fresco doble crema' },
+    { name: 'Yogur Natural 1L', cat: 'lacteos', cost: 5200, price: 7800, desc: 'Yogur natural sin azúcar' },
+    { name: 'Leche Entera 1L', cat: 'lacteos', cost: 3800, price: 5200, desc: 'Leche entera pasteurizada' },
+    { name: 'Mantequilla 250g', cat: 'lacteos', cost: 8900, price: 12500, desc: 'Mantequilla pura de vaca' },
+    { name: 'Crema de Leche 500ml', cat: 'lacteos', cost: 6700, price: 9200, desc: 'Crema de leche fresca' },
+    { name: 'Queso Mozzarella 500g', cat: 'lacteos', cost: 11200, price: 14800, desc: 'Mozzarella hilada' },
+    { name: 'Kumis 900ml', cat: 'lacteos', cost: 4800, price: 6900, desc: 'Kumis artesanal' },
+    // Frutos secos 5
+    { name: 'Maní Tostado 500g', cat: 'frutos secos', cost: 7500, price: 10200, desc: 'Maní tostado salado' },
+    { name: 'Almendras Premium 250g', cat: 'frutos secos', cost: 18500, price: 24500, desc: 'Almendras californianas' },
+    { name: 'Nueces Mixtas 400g', cat: 'frutos secos', cost: 16200, price: 21500, desc: 'Mix nueces y almendras' },
+    { name: 'Pistachos 200g', cat: 'frutos secos', cost: 19500, price: 25800, desc: 'Pistachos tostados' },
+    { name: 'Marañón 300g', cat: 'frutos secos', cost: 17800, price: 23200, desc: 'Marañón caramelo suave' },
+  ];
+
+  const productIds = [];
+  for (let i = 0; i < productos.length; i++) {
+    const p = productos[i];
+    const stock = Math.floor(Math.random() * 10) + 1; // 1-10
+    const sku = `DEMO-${String(i+1).padStart(3,'0')}`;
+    // seller_id null -> global
+    const res = await pool.query(
+      `INSERT INTO products (name, description, price, seller_id, cost_price, category, stock, sku) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+      [p.name, p.desc, p.price, null, p.cost, p.cat, stock, sku]
+    );
+    const pid = res.rows[0].id;
+    productIds.push({ ...p, id: pid, stock, sku });
+    // warehouse stock  stock + random 0-3 extra
+    await pool.query(`INSERT INTO warehouse_stock (product_id, total_quantity, reserved_quantity, last_restock) VALUES ($1,$2,0,CURRENT_DATE)`, [pid, stock]);
+    await pool.query(`INSERT INTO warehouse_stock_entries (product_id, quantity, notes) VALUES ($1,$2,$3)`, [pid, stock, `Stock inicial ${p.name}`]);
+    console.log(`  ✓ ${p.name} [${p.cat}] costo ${p.cost} venta ${p.price} stock ${stock} sku ${sku}`);
+  }
+
+  console.log('\n📦 Asignando inventario a vendedores (stock 1-10 por producto)...');
+  for (const vend of vendedoresData) {
+    // cada vendedor recibe 6 productos aleatorios con stock 1-10
+    const shuffled = [...productIds].sort(()=>0.5-Math.random()).slice(0,6);
+    for (const prod of shuffled) {
+      const qty = Math.floor(Math.random()*10)+1;
+      await pool.query(`INSERT INTO seller_inventory (seller_id, product_id, quantity, cost_price) VALUES ($1,$2,$3,$4) ON CONFLICT (seller_id, product_id) DO UPDATE SET quantity = EXCLUDED.quantity, cost_price = EXCLUDED.cost_price`, [vend.id, prod.id, qty, prod.cost]);
+      await pool.query(`INSERT INTO inventory_movements (seller_id, product_id, type, quantity, previous_quantity, new_quantity, reason) VALUES ($1,$2,'entry',$3,0,$3,'Asignación inicial demo')`, [vend.id, prod.id, qty]);
+    }
+    console.log(`  → ${vend.nombre} recibió ${shuffled.length} productos`);
+  }
+
+  console.log('\n👨‍👩‍👧 Creando 27 clientes (3 por vendedor)...');
+  const clientes = [];
+  let clienteCounter = 1;
+  for (const vend of vendedoresData) {
+    for (let ci = 0; ci < 3; ci++) {
+      const cname = `Cliente ${vend.nombre.split(' ')[0]}-${ci+1}`;
+      const phone = `310${String(clienteCounter).padStart(7,'0')}`;
+      const email = `cliente${clienteCounter}@demo.cobrokits`;
+      const address = `Calle ${clienteCounter} # ${10+ci}-${20+clienteCounter} Barrio Demo`;
+      const res = await pool.query(`INSERT INTO customers (name, phone, email, address, seller_id, empresa_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`, [cname, phone, email, address, vend.id, vend.empresa.id]);
+      clientes.push({ id: res.rows[0].id, name: cname, vendor: vend.nombre });
+      clienteCounter++;
+    }
+    console.log(`  ✓ 3 clientes para ${vend.nombre}`);
+  }
+
+  console.log('\n✅ SEED COMPLETADO\n');
+  console.log('═══════════════════════════════════════════════════════');
+  console.log('🔑 CREDENCIALES PROPIETARIOS DE EMPRESA (ROL: empresa)');
+  console.log('═══════════════════════════════════════════════════════');
+  empresas.forEach((e, i)=>{
+    const emp = empresaIds[i];
+    console.log(`${i+1}. ${emp.name}`);
+    console.log(`   Email: ${emp.email}`);
+    console.log(`   Pass : ${emp.pass}`);
+    console.log(`   ID   : ${emp.id}`);
+    console.log(`   Rol  : empresa | Vendedores: ${vendedorNombres[i].join(', ')}`);
+    console.log('');
+  });
+  console.log('───────────────────────────────────────────────────────');
+  console.log('🔑 CREDENCIALES VENDEDORES (ROL: seller) - opcional');
+  console.log('───────────────────────────────────────────────────────');
+  vendedoresData.forEach(v=>{
+    console.log(`- ${v.nombre} | ${v.email} | ${v.pass} | Empresa: ${v.empresa.name} | Clientes: 3`);
+  });
+  console.log('\n📊 Resumen:');
+  console.log(`  Empresas: ${empresaIds.length}`);
+  console.log(`  Vendedores: ${vendedoresData.length}`);
+  console.log(`  Clientes: ${clientes.length}`);
+  console.log(`  Productos: ${productIds.length} (embutidos 8, lácteos 7, frutos secos 5)`);
+  console.log(`  Stock por producto: 1-10 unidades`);
+  console.log(`  Categorías verificables: SELECT category, count(*) FROM products WHERE sku LIKE 'DEMO-%' GROUP BY category;`);
+
+  // Verificación final
+  const counts = await pool.query(`
+    SELECT 'sellers_empresa' as tipo, count(*)::int as total FROM sellers WHERE email LIKE '%@demo.cobrokits' AND role='empresa'
+    UNION ALL SELECT 'sellers_vendedor', count(*)::int FROM sellers WHERE email LIKE '%@demo.cobrokits' AND role='seller'
+    UNION ALL SELECT 'products_demo', count(*)::int FROM products WHERE sku LIKE 'DEMO-%'
+    UNION ALL SELECT 'customers_demo', count(*)::int FROM customers WHERE email LIKE '%@demo.cobrokits'
+  `);
+  console.log('\n🔍 Verificación DB:', counts.rows);
+
+  await pool.end();
+}
+
+run().catch(e=>{ console.error('❌ Error seed', e); process.exit(1)});
