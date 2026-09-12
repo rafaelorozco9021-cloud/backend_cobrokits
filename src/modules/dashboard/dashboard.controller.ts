@@ -31,7 +31,7 @@ export class DashboardController {
     const tenant = (req as any).tenant;
     const schema = tenant?.schema || this.tenantService.getSchemaFromRequest(req);
 
-    if (action === 'overview') return this.dashboardService.overview(sellerId);
+    if (action === 'overview') return this.dashboardService.overview(sellerId, schema);
     if (action === 'sellers') return this.dashboardService.sellers(schema);
 
     return { error: 'Acción no válida' };
