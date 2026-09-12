@@ -17,14 +17,16 @@ export class AuthController {
 
   @Public()
   @Post('login')
-  async login(@Body() body: { email: string; password: string }, @Res({ passthrough: true }) res: Response) {
+  async login(@Body() body: { email: string; password: string }, @Res({ passthrough: true }) res: Response, @Req() req: Request) {
     const result = await this.authService.login(body.email, body.password);
+    const host = (req.headers.host || '').toLowerCase();
+    const isProduction = host.includes('cobrokits.online');
     res.cookie('token', result.token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: isProduction,
       sameSite: 'lax',
       path: '/',
-      domain: process.env.NODE_ENV === 'production' ? '.cobrokits.online' : undefined,
+      domain: isProduction ? '.cobrokits.online' : undefined,
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
     return result;
