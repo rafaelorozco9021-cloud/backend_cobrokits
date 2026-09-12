@@ -18,6 +18,41 @@ export class TenantService {
     return 'empresa_' + id.replace(/-/g, '').slice(0, 8);
   }
 
+  // Resolver por slug de subdominio (ej: blacksoft.cobrokits.online -> blacksoft)
+  async resolveBySlug(slug: string): Promise<TenantContext | null> {
+    if (!slug) return null;
+    const norm = slug.trim().toLowerCase();
+    if (!norm) return null;
+    const cacheKey = 'slug:' + norm;
+    const cached = this.cache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < this.CACHE_TTL) return cached.tenant;
+    try {
+      // Buscar en public.tenants por nombre (slug)
+      let rows: any[] = await this.dataSource.query(
+        `SELECT id, schema_name, name FROM public.tenants WHERE lower(name)=lower($1) LIMIT 1`,
+        [norm],
+      );
+      if (rows.length) {
+        const t: TenantContext = { empresaId: rows[0].id, schema: rows[0].schema_name, name: rows[0].name };
+        this.cache.set(cacheKey, { tenant: t, ts: Date.now() });
+        return t;
+      }
+      // Fallback: buscar directamente en sellers (empresa) por nombre slug
+      rows = await this.dataSource.query(
+        `SELECT id, name FROM cobrokits.sellers WHERE role='empresa' AND lower(regexp_replace(name, '\\s+', '', 'g'))=lower($1) OR lower(name)=lower($1) LIMIT 1`,
+        [norm],
+      );
+      if (rows.length) {
+        const t: TenantContext = { empresaId: rows[0].id, schema: this.schemaForEmpresa(rows[0].id), name: rows[0].name };
+        this.cache.set(cacheKey, { tenant: t, ts: Date.now() });
+        return t;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   async resolveByEmpresaId(empresaId: string): Promise<TenantContext | null> {
     if (!empresaId || !/^[0-9a-f-]{36}$/i.test(empresaId)) return null;
     const cached = this.cache.get(empresaId);

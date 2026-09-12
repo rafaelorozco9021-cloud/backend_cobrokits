@@ -6,7 +6,29 @@ import { TenantService } from './tenant.service';
 export class TenantMiddleware implements NestMiddleware {
   constructor(private tenantService: TenantService) {}
 
+  private extractSlugFromHost(host?: string): string | null {
+    if (!host) return null;
+    const h = host.split(':')[0].toLowerCase();
+    if (h === 'cobrokits.online' || h === 'www.cobrokits.online' || h.endsWith('.vercel.app') || h === 'localhost' || h === '127.0.0.1') return null;
+    if (h.endsWith('.cobrokits.online')) {
+      const sub = h.replace('.cobrokits.online', '').trim();
+      if (sub && sub !== 'www' && !sub.includes('.')) return sub;
+    }
+    return null;
+  }
+
   async use(req: any, res: Response, next: NextFunction) {
+    // 0) Subdomain slug: X-Tenant-Slug header or Host header (wildcard *.cobrokits.online)
+    const slug = (req.headers['x-tenant-slug'] as string) || this.extractSlugFromHost(req.headers.host as string) || this.extractSlugFromHost(req.headers['x-tenant-host'] as string);
+    if (slug) {
+      const bySlug = await this.tenantService.resolveBySlug(slug);
+      if (bySlug) {
+        req.tenant = bySlug;
+        req.headers['x-tenant-id'] = bySlug.empresaId;
+        req.headers['x-tenant-schema'] = bySlug.schema;
+        return next();
+      }
+    }
     // Resolve tenant from header, JWT, or userId
     // 1) explicit header X-Tenant-Id
     let empresaId: string | null = (req.headers['x-tenant-id'] as string) || (req.headers['x-empresa-id'] as string) || null;
