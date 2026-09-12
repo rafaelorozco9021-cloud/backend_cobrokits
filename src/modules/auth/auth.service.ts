@@ -19,7 +19,11 @@ export class AuthService {
         if (rows.length > 0) {
           const u = rows[0];
           const token = sign({ userId: u.id, role: u.role || 'admin' }, this.jwtSecret, { expiresIn: '7d' });
-          return { user: { id: u.id, name: u.name, role: u.role || 'admin' }, token };
+          const userObj: any = { id: u.id, name: u.name, role: u.role || 'admin' };
+          if (u.role === 'empresa') {
+            userObj.slug = u.name.trim().toLowerCase().replace(/\s+/g, '').replace(/[^a-z0-9]/g, '');
+          }
+          return { user: userObj, token };
         }
       } catch (e) {
         // si la columna email no existe, ignorar
@@ -51,7 +55,12 @@ export class AuthService {
       const valid = hash.startsWith('$2') ? await bcrypt.compare(password, hash) : password === hash;
       if (!valid) throw new UnauthorizedException('Credenciales inválidas');
       const token = sign({ userId: user.id, role: user.role || 'seller' }, this.jwtSecret, { expiresIn: '7d' });
-      return { user: { id: user.id, name: user.name, role: user.role || 'seller', plan: user.plan, trial_end: user.trial_end, subscription_status: user.subscription_status }, token };
+      const userObj: any = { id: user.id, name: user.name, role: user.role || 'seller', plan: user.plan, trial_end: user.trial_end, subscription_status: user.subscription_status };
+      if (user.role === 'empresa') {
+        const slug = user.name.trim().toLowerCase().replace(/\s+/g, '').replace(/[^a-z0-9]/g, '');
+        userObj.slug = slug;
+      }
+      return { user: userObj, token };
     } catch (e: any) {
       if (e instanceof UnauthorizedException) throw e;
       // si es error de columna faltante (42703), intentar por phone
@@ -68,7 +77,12 @@ export class AuthService {
             throw new UnauthorizedException('Credenciales inválidas');
           }
           const token = sign({ userId: user.id, role: user.role || 'seller' }, this.jwtSecret, { expiresIn: '7d' });
-          return { user: { id: user.id, name: user.name, role: user.role || 'seller', plan: user.plan, trial_end: user.trial_end, subscription_status: user.subscription_status }, token };
+          const userObj2: any = { id: user.id, name: user.name, role: user.role || 'seller', plan: user.plan, trial_end: user.trial_end, subscription_status: user.subscription_status };
+          if (user.role === 'empresa') {
+            const slug = user.name.trim().toLowerCase().replace(/\s+/g, '').replace(/[^a-z0-9]/g, '');
+            userObj2.slug = slug;
+          }
+          return { user: userObj2, token };
         } catch (e2) {
           if (e2 instanceof UnauthorizedException) throw e2;
           throw new UnauthorizedException('Credenciales inválidas');

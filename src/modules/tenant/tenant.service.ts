@@ -27,9 +27,9 @@ export class TenantService {
     const cached = this.cache.get(cacheKey);
     if (cached && Date.now() - cached.ts < this.CACHE_TTL) return cached.tenant;
     try {
-      // Buscar en public.tenants por nombre (slug)
+      // Buscar en public.tenants por nombre (slug) - match exacto o slugificado
       let rows: any[] = await this.dataSource.query(
-        `SELECT id, schema_name, name FROM public.tenants WHERE lower(name)=lower($1) LIMIT 1`,
+        `SELECT id, schema_name, name FROM public.tenants WHERE lower(name)=lower($1) OR lower(regexp_replace(name, '[^a-z0-9]', '', 'g'))=lower($1) LIMIT 1`,
         [norm],
       );
       if (rows.length) {
@@ -39,7 +39,7 @@ export class TenantService {
       }
       // Fallback: buscar directamente en sellers (empresa) por nombre slug
       rows = await this.dataSource.query(
-        `SELECT id, name FROM cobrokits.sellers WHERE role='empresa' AND lower(regexp_replace(name, '\\s+', '', 'g'))=lower($1) OR lower(name)=lower($1) LIMIT 1`,
+        `SELECT id, name FROM cobrokits.sellers WHERE role='empresa' AND (lower(regexp_replace(name, '[^a-z0-9]', '', 'g'))=lower($1) OR lower(name)=lower($1)) LIMIT 1`,
         [norm],
       );
       if (rows.length) {
