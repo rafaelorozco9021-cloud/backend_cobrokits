@@ -1,11 +1,29 @@
-﻿import { Controller, Get, Post, Patch, Delete, Query, Body, Res, Req } from '@nestjs/common';
+﻿import { Controller, Get, Post, Patch, Delete, Query, Body, Res, Req, UnauthorizedException } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { Public } from '../../common/decorators/public.decorator';
 import type { Response, Request } from 'express';
+import { verify } from 'jsonwebtoken';
 
 @Controller('api/auth')
 export class AuthController {
   constructor(private authService: AuthService) {}
+
+  @Get('me')
+  async me(@Req() req: Request) {
+    const cookie = (req as any).cookies?.token;
+    const authHeader = req.headers.authorization;
+    let token: string | null = null;
+    if (cookie) token = cookie;
+    else if (authHeader?.startsWith('Bearer ')) token = authHeader.substring(7);
+    if (!token) throw new UnauthorizedException('No autenticado');
+    let payload: any;
+    try {
+      payload = verify(token, process.env.JWT_SECRET || 'cobrokits-jwt-secret-change-in-production');
+    } catch {
+      throw new UnauthorizedException('Token inválido');
+    }
+    return this.authService.me(payload.userId);
+  }
 
   @Get()
   async get(@Query('action') action: string = 'list', @Query('sellerId') sellerId: string) {

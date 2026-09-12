@@ -92,6 +92,24 @@ export class AuthService {
     }
   }
 
+  async me(userId: string) {
+    const rows: any[] = await this.dataSource.query(
+      `SELECT id, name, email, role, empresa_id FROM cobrokits.sellers WHERE id = $1`,
+      [userId],
+    );
+    if (!rows.length) throw new UnauthorizedException('Usuario no encontrado');
+    const u = rows[0];
+    let empresaName: string | null = null;
+    if (u.role === 'empresa') {
+      empresaName = u.name;
+    } else if (u.empresa_id) {
+      const emp: any[] = await this.dataSource.query(`SELECT name FROM cobrokits.sellers WHERE id = $1`, [u.empresa_id]);
+      if (emp.length) empresaName = emp[0].name;
+    }
+    const slug = empresaName ? empresaName.trim().toLowerCase().replace(/\s+/g, '').replace(/[^a-z0-9]/g, '') : null;
+    return { id: u.id, name: u.name, email: u.email, role: u.role, empresa_id: u.empresa_id, empresa_name: empresaName, slug };
+  }
+
   async listSellers() {
     try {
       return await this.dataSource.query(`SELECT id, name, email, phone, status, role, empresa_id FROM cobrokits.sellers WHERE role = 'seller' ORDER BY name`);
