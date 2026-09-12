@@ -5,6 +5,27 @@ import { DataSource } from 'typeorm';
 export class DashboardService {
   constructor(private dataSource: DataSource) {}
 
+  private async getSchema(sellerId: string): Promise<string> {
+    try {
+      const r: any[] = await this.dataSource.query(
+        `SELECT schema_name FROM public.tenants WHERE id = $1`, [sellerId]
+      );
+      if (r[0]?.schema_name) return r[0].schema_name;
+    } catch {}
+    try {
+      const r: any[] = await this.dataSource.query(
+        `SELECT empresa_id FROM cobrokits.sellers WHERE id = $1 AND role != 'empresa'`, [sellerId]
+      );
+      if (r[0]?.empresa_id) {
+        const s: any[] = await this.dataSource.query(
+          `SELECT schema_name FROM public.tenants WHERE id = $1`, [r[0].empresa_id]
+        );
+        if (s[0]?.schema_name) return s[0].schema_name;
+      }
+    } catch {}
+    return 'cobrokits';
+  }
+
   async overview(sellerId: string) {
     const now = new Date();
     const bogotaDate = new Date(now.toLocaleString('en-US', { timeZone: 'America/Bogota' }));
@@ -31,10 +52,12 @@ export class DashboardService {
       };
     }
 
+    const schema = await this.getSchema(sellerId);
+
     // Detectar rol empresa
     let role: string | null = null;
     try {
-      const r: any[] = await this.dataSource.query(`SELECT role FROM cobrokits.sellers WHERE id = $1`, [sellerId]);
+      const r: any[] = await this.dataSource.query(`SELECT role FROM ${schema}.sellers WHERE id = $1`, [sellerId]);
       role = r[0]?.role || null;
     } catch {}
     const isEmpresa = role === 'empresa';
@@ -42,7 +65,7 @@ export class DashboardService {
     // Si es empresa, agregar todos sus vendedores
     let targetSellerIds: string[] = [sellerId];
     if (isEmpresa) {
-      const vends: any[] = await this.dataSource.query(`SELECT id FROM cobrokits.sellers WHERE empresa_id = $1`, [sellerId]);
+      const vends: any[] = await this.dataSource.query(`SELECT id FROM ${schema}.sellers WHERE empresa_id = $1`, [sellerId]);
       targetSellerIds = vends.map((v) => v.id);
       if (targetSellerIds.length === 0) targetSellerIds = [sellerId];
     }
@@ -55,17 +78,16 @@ export class DashboardService {
       : await this.dataSource.query(`SELECT cobrokits.get_collection_target($1, $2) as target`, [sellerId, todayDate]);
 
     const sellers: any[] = isEmpresa
-      ? await this.dataSource.query('SELECT id, name, email, status, role, empresa_id FROM cobrokits.sellers WHERE empresa_id = $1 OR id = $1 ORDER BY name', [sellerId])
-      : await this.dataSource.query('SELECT id, name, email, status, role, empresa_id FROM cobrokits.sellers WHERE empresa_id = (SELECT empresa_id FROM cobrokits.sellers WHERE id=$1) OR id = (SELECT empresa_id FROM cobrokits.sellers WHERE id=$1) ORDER BY name', [sellerId]);
+      ? await this.dataSource.query(`SELECT id, name, email, status, role, empresa_id FROM ${schema}.sellers WHERE empresa_id = $1 OR id = $1 ORDER BY name`, [sellerId])
+      : await this.dataSource.query(`SELECT id, name, email, status, role, empresa_id FROM ${schema}.sellers WHERE empresa_id = (SELECT empresa_id FROM ${schema}.sellers WHERE id=$1) OR id = (SELECT empresa_id FROM ${schema}.sellers WHERE id=$1) ORDER BY name`, [sellerId]);
 
-    // Balances: para empresa, solo sus vendedores; para vendedor, global o solo suyo? Mantenemos global para compatibilidad pero filtramos si es empresa
     const balances: any[] = isEmpresa
       ? await this.dataSource.query(
-          `SELECT seller_id, date, total_sales, total_delivered, total_sold, is_closed FROM cobrokits.daily_seller_stock WHERE seller_id = ANY($1::uuid[]) AND date = $2`,
+          `SELECT seller_id, date, total_sales, total_delivered, total_sold, is_closed FROM ${schema}.daily_seller_stock WHERE seller_id = ANY($1::uuid[]) AND date = $2`,
           [targetSellerIds, todayDate],
         )
       : await this.dataSource.query(
-          `SELECT seller_id, date, total_sales, total_delivered, total_sold, is_closed FROM cobrokits.daily_seller_stock WHERE date = $1`,
+          `SELECT seller_id, date, total_sales, total_delivered, total_sold, is_closed FROM ${schema}.daily_seller_stock WHERE date = $1`,
           [todayDate],
         );
 
@@ -83,8 +105,8 @@ export class DashboardService {
             COALESCE(SUM(p.amount) FILTER (WHERE p.payment_method = 'transferencia'), 0) as transferencia,
             COALESCE(SUM(p.amount) FILTER (WHERE p.payment_method = 'tarjeta'), 0) as tarjeta,
             COALESCE(SUM(p.amount), 0) as total_entrega
-           FROM cobrokits.daily_seller_stock d
-            LEFT JOIN cobrokits.payments p ON p.seller_id = d.seller_id AND p.created_at::date = d.date
+           FROM ${schema}.daily_seller_stock d
+            LEFT JOIN ${schema}.payments p ON p.seller_id = d.seller_id AND p.created_at::date = d.date
             WHERE d.seller_id = ANY($1::uuid[]) AND d.date BETWEEN $2 AND $3
             GROUP BY d.date
             ORDER BY d.date`,
@@ -98,8 +120,8 @@ export class DashboardService {
             COALESCE(SUM(p.amount) FILTER (WHERE p.payment_method = 'transferencia'), 0) as transferencia,
             COALESCE(SUM(p.amount) FILTER (WHERE p.payment_method = 'tarjeta'), 0) as tarjeta,
             COALESCE(SUM(p.amount), 0) as total_entrega
-           FROM cobrokits.daily_seller_stock d
-            LEFT JOIN cobrokits.payments p ON p.seller_id = d.seller_id AND p.created_at::date = d.date
+           FROM ${schema}.daily_seller_stock d
+            LEFT JOIN ${schema}.payments p ON p.seller_id = d.seller_id AND p.created_at::date = d.date
             WHERE d.seller_id = $1 AND d.date BETWEEN $2 AND $3
             GROUP BY d.date
             ORDER BY d.date`,
@@ -108,11 +130,11 @@ export class DashboardService {
 
     const lowStock: any[] = isEmpresa
       ? await this.dataSource.query(
-          `SELECT si.product_id, p.name, si.quantity, si.cost_price, si.seller_id FROM cobrokits.seller_inventory si JOIN cobrokits.products p ON si.product_id = p.id WHERE si.seller_id = ANY($1::uuid[]) AND si.quantity <= 5`,
+          `SELECT si.product_id, p.name, si.quantity, si.cost_price, si.seller_id FROM ${schema}.seller_inventory si JOIN ${schema}.products p ON si.product_id = p.id WHERE si.seller_id = ANY($1::uuid[]) AND si.quantity <= 5`,
           [targetSellerIds],
         )
       : await this.dataSource.query(
-          `SELECT si.product_id, p.name, si.quantity, si.cost_price FROM cobrokits.seller_inventory si JOIN cobrokits.products p ON si.product_id = p.id WHERE si.seller_id = $1 AND si.quantity <= 5`,
+          `SELECT si.product_id, p.name, si.quantity, si.cost_price FROM ${schema}.seller_inventory si JOIN ${schema}.products p ON si.product_id = p.id WHERE si.seller_id = $1 AND si.quantity <= 5`,
           [sellerId],
         );
 
@@ -127,11 +149,11 @@ export class DashboardService {
     };
   }
 
-  async sellers() {
+  async sellers(schema: string = 'cobrokits') {
     try {
-      return await this.dataSource.query('SELECT id, name, email, phone, status FROM cobrokits.sellers ORDER BY name');
+      return await this.dataSource.query(`SELECT id, name, email, phone, status FROM ${schema}.sellers ORDER BY name`);
     } catch {
-      return this.dataSource.query('SELECT id, name, phone, status FROM cobrokits.sellers ORDER BY name');
+      return this.dataSource.query(`SELECT id, name, phone, status FROM ${schema}.sellers ORDER BY name`);
     }
   }
 }

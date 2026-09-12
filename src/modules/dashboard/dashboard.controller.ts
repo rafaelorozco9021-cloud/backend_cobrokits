@@ -2,10 +2,14 @@ import { Controller, Get, Query, Req, UnauthorizedException } from '@nestjs/comm
 import { DashboardService } from './dashboard.service';
 import type { Request } from 'express';
 import { verify } from 'jsonwebtoken';
+import { TenantService } from '../tenant/tenant.service';
 
 @Controller('api/dashboard')
 export class DashboardController {
-  constructor(private dashboardService: DashboardService) {}
+  constructor(
+    private dashboardService: DashboardService,
+    private tenantService: TenantService,
+  ) {}
 
   @Get()
   async get(@Query('action') action: string = 'overview', @Req() req: Request) {
@@ -24,9 +28,11 @@ export class DashboardController {
     }
 
     const sellerId = payload.userId;
+    const tenant = (req as any).tenant;
+    const schema = tenant?.schema || this.tenantService.getSchemaFromRequest(req);
 
     if (action === 'overview') return this.dashboardService.overview(sellerId);
-    if (action === 'sellers') return this.dashboardService.sellers();
+    if (action === 'sellers') return this.dashboardService.sellers(schema);
 
     return { error: 'Acción no válida' };
   }
