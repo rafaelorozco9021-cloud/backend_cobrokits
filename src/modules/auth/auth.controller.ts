@@ -19,8 +19,13 @@ export class AuthController {
   @Post('login')
   async login(@Body() body: { email: string; password: string }, @Res({ passthrough: true }) res: Response, @Req() req: Request) {
     const result = await this.authService.login(body.email, body.password);
+    // El rewrite de Next.js proxea al backend: Host llega como backend-cobrokits.onrender.com.
+    // Usar x-forwarded-host / x-tenant-host para detectar el dominio público real.
     const host = (req.headers.host || '').toLowerCase();
-    const isProduction = host.includes('cobrokits.online');
+    const fwdHost = ((req.headers['x-forwarded-host'] as string) || '').split(',')[0].trim().toLowerCase();
+    const tenantHost = ((req.headers['x-tenant-host'] as string) || '').toLowerCase();
+    const effectiveHost = `${host} ${fwdHost} ${tenantHost}`;
+    const isProduction = effectiveHost.includes('cobrokits.online');
     res.cookie('token', result.token, {
       httpOnly: true,
       secure: isProduction,
