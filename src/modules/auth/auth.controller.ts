@@ -24,6 +24,7 @@ export class AuthController {
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       path: '/',
+      domain: process.env.NODE_ENV === 'production' ? '.cobrokits.online' : undefined,
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
     return result;
