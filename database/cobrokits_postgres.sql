@@ -516,6 +516,10 @@ CREATE INDEX idx_warehouse_stock_entries_product ON cobrokits.warehouse_stock_en
 CREATE INDEX idx_daily_seller_entries_seller ON cobrokits.daily_seller_entries(seller_id);
 CREATE INDEX idx_daily_seller_entries_date ON cobrokits.daily_seller_entries(date);
 
-GRANT ALL ON ALL TABLES IN SCHEMA cobrokits TO public;
-GRANT ALL ON ALL SEQUENCES IN SCHEMA cobrokits TO public;
-GRANT ALL ON ALL FUNCTIONS IN SCHEMA cobrokits TO public;
+-- Seguridad: NO otorgar privilegios a PUBLIC. El rol de la app es propietario del schema.
+-- Si tu BD heredó los grant viejos, ejecuta en producción:
+--   REVOKE ALL ON ALL TABLES IN SCHEMA cobrokits FROM PUBLIC;
+--   REVOKE ALL ON ALL SEQUENCES IN SCHEMA cobrokits FROM PUBLIC;
+--   REVOKE ALL ON ALL FUNCTIONS IN SCHEMA cobrokits FROM PUBLIC;
+-- ... y otorga solo a tu rol de aplicación:
+--   GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA cobrokits TO <rol_app>;

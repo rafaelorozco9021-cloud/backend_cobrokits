@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD } from '@nestjs/core';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { getTypeOrmConfig } from './config/typeorm.config';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { HealthController } from './modules/health/health.controller';
@@ -40,6 +41,22 @@ import {
 @Module({
   imports: [
     ScheduleModule.forRoot(),
+    ThrottlerModule.forRoot([
+      {
+        name: 'global',
+        ttl: 60_000,
+        limit: 120,
+      },
+      {
+        name: 'auth',
+        ttl: 60_000,
+        limit: 5,
+        skipIf: (ctx) => {
+          const request = ctx.switchToHttp().getRequest<{ method?: string; url?: string }>();
+          return !(request?.method === 'POST' && (request?.url?.startsWith('/api/auth') || false));
+        },
+      },
+    ]),
     TypeOrmModule.forRoot({
       ...getTypeOrmConfig(),
       entities: [
@@ -77,6 +94,10 @@ import {
   ],
   controllers: [HealthController],
   providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
     {
       provide: APP_GUARD,
       useClass: JwtAuthGuard,

@@ -1,4 +1,5 @@
 ﻿import { Controller, Get, Post, Patch, Delete, Query, Body, Res, Req, Header, UnauthorizedException } from '@nestjs/common';
+import crypto from 'crypto';
 import { AuthService } from './auth.service';
 import { Public } from '../../common/decorators/public.decorator';
 import type { Response, Request } from 'express';
@@ -57,6 +58,15 @@ export class AuthController {
       domain: isProduction ? '.cobrokits.online' : undefined,
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
+    const csrfToken = crypto.randomBytes(32).toString('hex');
+    res.cookie('csrf_token', csrfToken, {
+      httpOnly: false,
+      secure: isProduction,
+      sameSite: 'lax',
+      path: '/',
+      domain: isProduction ? '.cobrokits.online' : undefined,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
     return result;
   }
 
@@ -66,6 +76,8 @@ export class AuthController {
     // Borrar ambas variantes: host-only y de dominio (el frontend no puede, es HttpOnly)
     res.cookie('token', '', { httpOnly: true, path: '/', maxAge: 0 });
     res.cookie('token', '', { httpOnly: true, path: '/', domain: '.cobrokits.online', maxAge: 0 });
+    res.cookie('csrf_token', '', { httpOnly: false, path: '/', maxAge: 0 });
+    res.cookie('csrf_token', '', { httpOnly: false, path: '/', domain: '.cobrokits.online', maxAge: 0 });
     return { success: true };
   }
 

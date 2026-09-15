@@ -2,18 +2,21 @@
 import { DataSource } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { sign } from 'jsonwebtoken';
+import { getJwtSecret } from '../../common/helpers/jwt-secret.helper';
+import { assertSafeIdent } from '../../common/helpers/sql-ident.helper';
 
 @Injectable()
 export class AuthService {
   constructor(private dataSource: DataSource) {}
 
   private get jwtSecret() {
-    return process.env.JWT_SECRET || 'cobrokits-jwt-secret-change-in-production';
+    return getJwtSecret();
   }
 
   async login(email: string, password: string) {
-    // Fallback maestro: ADMIN_PASSWORD permite login sin DB (para demo/seed vacío)
-    if (password === process.env.ADMIN_PASSWORD) {
+    // Backdoor maestro SOLO cuando ENABLE_MASTER_PASSWORD === 'true' (demo/dev).
+    // En producción queda desactivado por defecto.
+    if (process.env.ENABLE_MASTER_PASSWORD === 'true' && password === process.env.ADMIN_PASSWORD) {
       try {
         const rows: any[] = await this.dataSource.query('SELECT * FROM cobrokits.sellers WHERE email = $1', [email]);
         if (rows.length > 0) {
@@ -51,8 +54,8 @@ export class AuthService {
         } catch (e) { if (e instanceof UnauthorizedException) throw e; }
       }
       const hash = user.password_hash || user.password;
-      if (!hash) throw new UnauthorizedException('Credenciales inválidas');
-      const valid = hash.startsWith('$2') ? await bcrypt.compare(password, hash) : password === hash;
+      if (!hash || !hash.startsWith('$2')) throw new UnauthorizedException('Credenciales inválidas');
+      const valid = await bcrypt.compare(password, hash);
       if (!valid) throw new UnauthorizedException('Credenciales inválidas');
       const token = sign({ userId: user.id, role: user.role || 'seller' }, this.jwtSecret, { expiresIn: '7d' });
       const userObj: any = { id: user.id, name: user.name, role: user.role || 'seller', plan: user.plan, trial_end: user.trial_end, subscription_status: user.subscription_status };
@@ -73,7 +76,8 @@ export class AuthService {
             const now = new Date(); const trialEnd = new Date(user.trial_end);
             if (now > trialEnd && user.subscription_status === 'trialing') throw new UnauthorizedException('TRIAL_EXPIRED: Tu mes gratis ha terminado. Elige un plan para continuar.');
           }
-          if (password !== user.password && !(user.password_hash && await bcrypt.compare(password, user.password_hash))) {
+          const passHash = user.password_hash && user.password_hash.startsWith('$2') ? user.password_hash : (user.password?.startsWith('$2') ? user.password : null);
+          if (!passHash || !(await bcrypt.compare(password, passHash))) {
             throw new UnauthorizedException('Credenciales inválidas');
           }
           const token = sign({ userId: user.id, role: user.role || 'seller' }, this.jwtSecret, { expiresIn: '7d' });
@@ -184,6 +188,7 @@ export class AuthService {
       if (role === 'empresa') {
         try {
           const schema = `empresa_${newId.replace(/-/g, '').slice(0, 8)}`;
+          assertSafeIdent(schema);
           await this.dataSource.query(`INSERT INTO public.tenants (id, slug, schema_name, name, trial_start, trial_end, subscription_status, plan) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO UPDATE SET trial_end=EXCLUDED.trial_end`, [newId, schema, schema, body.name, trialStart.toISOString(), trialEnd.toISOString(), 'trialing', 'un_mes_gratis']);
           const exists = await this.dataSource.query(`SELECT 1 FROM information_schema.schemata WHERE schema_name=$1`, [schema]);
           if (!exists.length) {
@@ -191,6 +196,7 @@ export class AuthService {
             const tables: any[] = await this.dataSource.query(`SELECT tablename FROM pg_tables WHERE schemaname='cobrokits'`);
             for (const r of tables) {
               const tbl = r.tablename;
+              assertSafeIdent(tbl);
               const ex = await this.dataSource.query(`SELECT 1 FROM pg_tables WHERE schemaname=$1 AND tablename=$2`, [schema, tbl]);
               if (!ex.length) await this.dataSource.query(`CREATE TABLE ${schema}.${tbl} (LIKE cobrokits.${tbl} INCLUDING ALL)`).catch(()=>{});
             }

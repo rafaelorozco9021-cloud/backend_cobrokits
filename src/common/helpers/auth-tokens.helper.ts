@@ -1,6 +1,7 @@
 import { verify } from 'jsonwebtoken';
+import { getJwtSecret } from './jwt-secret.helper';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'cobrokits-jwt-secret-change-in-production';
+const JWT_SECRET = getJwtSecret();
 
 /**
  * Extrae TODOS los valores de la cookie `token` del header crudo.

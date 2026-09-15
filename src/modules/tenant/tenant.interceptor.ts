@@ -1,6 +1,7 @@
 import { Injectable, NestInterceptor, ExecutionContext, CallHandler } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { DataSource } from 'typeorm';
+import { assertSafeIdent } from '../../common/helpers/sql-ident.helper';
 
 @Injectable()
 export class TenantInterceptor implements NestInterceptor {
@@ -10,11 +11,10 @@ export class TenantInterceptor implements NestInterceptor {
     const req = context.switchToHttp().getRequest();
     const tenant = req.tenant;
     if (tenant?.schema) {
-      // Set search_path for this request. Use a dedicated query to set for the pooled connection.
-      // Note: pg pool shares connections, so we must use SET LOCAL within a transaction or QueryRunner.
-      // Simpler: each controller will use search_path prefix; but we set here as best-effort.
+      // Set search_path for this request. El schema viene del registro de tenants
+      // (no del input del cliente), pero validamos el identificador antes de interpolar.
       try {
-        await this.dataSource.query(`SET search_path TO ${tenant.schema}, cobrokits, public`);
+        await this.dataSource.query(`SET search_path TO ${assertSafeIdent(tenant.schema)}, cobrokits, public`);
       } catch {}
     } else {
       try { await this.dataSource.query(`SET search_path TO cobrokits, public`); } catch {}
