@@ -30,7 +30,59 @@ export class GeneralStockController {
 
   @Post()
   async create(@Body() body: any) {
-    return { stub: true, module: 'general-stock', received: body, message: 'POST stub - implementar logica de negocio' };
+    return { stub: true, module: 'general-stock', received: body, message: 'POST stub - usar POST /api/general-stock/add' };
+  }
+
+  // Ingreso de stock a bodega: suma cantidad al producto de TU empresa.
+  @Post('add')
+  async add(@Body() body: any, @Req() req?: any) {
+    try {
+      const schema = getSchemaFromRequest(req) || 'cobrokits';
+      const productId = body.product_id || body.productId;
+      const qty = Number(body.quantity ?? body.qty ?? 0);
+      if (!productId) return { success: false, error: 'product_id requerido' };
+      if (!Number.isFinite(qty) || qty <= 0) return { success: false, error: 'La cantidad debe ser mayor a 0' };
+      const userId = getUserIdFromRequest(req || {});
+      const empresaId = await getEmpresaIdForUser(this.dataSource, userId as string);
+      if (!empresaId) return { success: false, error: 'No se pudo determinar empresa' };
+      // Validar que el producto pertenece a esta empresa (nunca al de otra)
+      const prod: any[] = await this.dataSource.query(
+        `SELECT id, name, empresa_id FROM ${schema}.products WHERE id = $1`,
+        [productId],
+      );
+      if (!prod.length) return { success: false, error: 'Producto no encontrado en tu empresa' };
+      if (prod[0].empresa_id && prod[0].empresa_id !== empresaId)
+        return { success: false, error: 'No autorizado: producto de otra empresa' };
+      await this.dataSource.query(
+        `INSERT INTO ${schema}.warehouse_stock (product_id, total_quantity, reserved_quantity, last_restock)
+         VALUES ($1, $2, 0, CURRENT_DATE)
+         ON CONFLICT (product_id) DO UPDATE SET total_quantity = ${schema}.warehouse_stock.total_quantity + $2, updated_at = NOW()`,
+        [productId, qty],
+      );
+      await this.dataSource.query(
+        `INSERT INTO ${schema}.warehouse_stock_entries (product_id, quantity, notes) VALUES ($1, $2, $3)`,
+        [productId, qty, body.notes || 'Ingreso manual desde Inventario General'],
+      ).catch(() => {});
+      if (schema !== 'cobrokits') {
+        await this.dataSource.query(
+          `INSERT INTO cobrokits.warehouse_stock (product_id, total_quantity, reserved_quantity, last_restock)
+           VALUES ($1, $2, 0, CURRENT_DATE)
+           ON CONFLICT (product_id) DO UPDATE SET total_quantity = cobrokits.warehouse_stock.total_quantity + $2, updated_at = NOW()`,
+          [productId, qty],
+        ).catch(() => {});
+        await this.dataSource.query(
+          `INSERT INTO cobrokits.warehouse_stock_entries (product_id, quantity, notes) VALUES ($1, $2, $3)`,
+          [productId, qty, body.notes || 'Ingreso manual desde Inventario General'],
+        ).catch(() => {});
+      }
+      const cur: any[] = await this.dataSource.query(
+        `SELECT total_quantity FROM ${schema}.warehouse_stock WHERE product_id = $1`,
+        [productId],
+      );
+      return { success: true, product_id: productId, added: qty, stock: Number(cur[0]?.total_quantity ?? 0) };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
   }
 
   @Patch()
