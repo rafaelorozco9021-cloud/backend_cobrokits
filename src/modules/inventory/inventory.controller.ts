@@ -12,14 +12,14 @@ export class InventoryController {
       if (!sellerId) return { success: false, error: 'sellerId requerido' };
       const d = date || new Date().toISOString().split('T')[0];
       const assigned: any[] = await this.dataSource.query(
-        `SELECT product_id, COALESCE(SUM(quantity),0)::int as asignado FROM cobrokits.inventory_movements WHERE seller_id=$1 AND type='entry' AND created_at::date=$2::date AND reason LIKE 'Entrega cobro%' GROUP BY product_id`,
+        `SELECT product_id, COALESCE(SUM(quantity),0)::int as asignado FROM cobrokits.inventory_movements WHERE seller_id=$1 AND type='entry' AND (created_at AT TIME ZONE 'America/Bogota')::date=$2::date AND reason LIKE 'Entrega cobro%' GROUP BY product_id`,
         [sellerId, d]
       );
       const sold: any[] = await this.dataSource.query(
         `SELECT cvi.product_id, COALESCE(SUM(cvi.quantity),0)::int as vendido
          FROM cobrokits.customer_visit_items cvi
          JOIN cobrokits.customer_visits cv ON cv.id=cvi.visit_id
-         WHERE cv.seller_id=$1 AND cv.visit_date::date=$2::date
+         WHERE cv.seller_id=$1 AND (cv.visit_date AT TIME ZONE 'America/Bogota')::date=$2::date
          GROUP BY cvi.product_id`,
         [sellerId, d]
       );
@@ -163,7 +163,7 @@ export class InventoryController {
       // calcular lo llevado hoy desde movements (solo entregas diarias, no asignación inicial seed)
       try {
         const mov: any[] = await this.dataSource.query(
-          `SELECT COALESCE(SUM(quantity),0) as sum FROM cobrokits.inventory_movements WHERE seller_id=$1 AND type='entry' AND created_at::date=$2 AND reason LIKE 'Entrega cobro%'`,
+          `SELECT COALESCE(SUM(quantity),0) as sum FROM cobrokits.inventory_movements WHERE seller_id=$1 AND type='entry' AND (created_at AT TIME ZONE 'America/Bogota')::date=$2 AND reason LIKE 'Entrega cobro%'`,
           [sellerId, today]
         );
         totalLlevado = Number(mov[0]?.sum || 0);

@@ -45,7 +45,9 @@ export class VisitsController {
         params.push(cob);
       }
       if (date) {
-        where += ` AND cv.visit_date::date = $${idx++}::date`;
+        // Día calendario Bogotá (el frontend envía la fecha del cliente en Bogotá).
+        // Comparar en UTC movería ventas nocturnas 19:00-23:59 al día siguiente.
+        where += ` AND (cv.visit_date AT TIME ZONE 'America/Bogota')::date = $${idx++}::date`;
         params.push(date);
       }
       const q = `
@@ -86,7 +88,7 @@ export class VisitsController {
           LEFT JOIN cobrokits.payments p ON p.visit_id=cv.id
           LEFT JOIN cobrokits.customers c ON c.id=p.customer_id
           LEFT JOIN cobrokits.customer_visit_items cvi ON cvi.visit_id=cv.id
-          WHERE cv.seller_id = $1 AND cv.visit_date::date = CURRENT_DATE
+          WHERE cv.seller_id = $1 AND (cv.visit_date AT TIME ZONE 'America/Bogota')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')::date
           GROUP BY cv.id, c.name, c.phone, s.name, p.amount, p.payment_method, cv.visit_date
           ORDER BY cv.visit_date DESC LIMIT 50
         `;
