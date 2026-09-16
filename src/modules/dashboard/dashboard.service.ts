@@ -32,23 +32,19 @@ export class DashboardService {
     const todayDate = bogotaDate.toISOString().split('T')[0];
     const dow = bogotaDate.getDay();
 
-    // Admin sintético no tiene UUID real -> devolver datos mock sin consultar funciones que requieren uuid
+    // Admin sintético no tiene UUID real -> NO exponer datos globales multiempresa (fail-closed).
+    // El panel /admin usa AdminModule con superadmin guard, no este endpoint.
     const isAdmin = sellerId === 'admin' || !/^[0-9a-f-]{36}$/i.test(sellerId);
     if (isAdmin) {
-      const sellers: any[] = await this.dataSource.query('SELECT id, name, phone, status FROM cobrokits.sellers ORDER BY name').catch(() => []);
-      const balances: any[] = await this.dataSource.query(
-        `SELECT seller_id, date, total_sales, total_delivered, total_sold, is_closed FROM cobrokits.daily_seller_stock WHERE date = $1`,
-        [todayDate],
-      ).catch(() => []);
       return {
         today_date: todayDate,
         dow,
         collection_target: 0,
-        sellers,
-        balances,
+        sellers: [],
+        balances: [],
         week: [],
         lowStock: [],
-        note: 'Admin mode - sin seller UUID real, datos parciales',
+        note: 'Admin mode - sin tenant/empresa, datos bloqueados por aislamiento multiempresa',
       };
     }
 
@@ -149,12 +145,23 @@ export class DashboardService {
     };
   }
 
-  async sellers(schema: string = 'cobrokits') {
-    try {
-      return await this.dataSource.query(`SELECT id, name, email, phone, status FROM ${schema}.sellers ORDER BY name`);
-    } catch {
-      return this.dataSource.query(`SELECT id, name, phone, status FROM ${schema}.sellers ORDER BY name`);
+  // sellers admite empresaId para despliegues con schema compartido 'cobrokits'
+  // (aislamiento por empresa_id). Sin schema físico ni empresa -> [] (fail-closed).
+  async sellers(schema: string = 'cobrokits', empresaId?: string) {
+    if (schema && schema !== 'cobrokits' && schema !== 'public') {
+      try {
+        return await this.dataSource.query(`SELECT id, name, email, phone, status FROM ${schema}.sellers ORDER BY name`);
+      } catch {
+        return this.dataSource.query(`SELECT id, name, phone, status FROM ${schema}.sellers ORDER BY name`);
+      }
     }
+    if (empresaId && /^[0-9a-f-]{36}$/i.test(empresaId)) {
+      return this.dataSource.query(
+        `SELECT id, name, email, phone, status FROM cobrokits.sellers WHERE (empresa_id = $1 OR id = $1) ORDER BY name`,
+        [empresaId],
+      );
+    }
+    return [];
   }
 }
 

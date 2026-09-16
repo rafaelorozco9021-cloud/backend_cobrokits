@@ -33,3 +33,11 @@ export async function getTargetSellerIds(dataSource: DataSource, userId: string)
 export function getUserIdFromRequest(req: any): string | null {
   return req.headers?.['x-user-id'] || req.user?.userId || req.user?.id || null;
 }
+
+// Schema del tenant resuelto por TenantMiddleware (via slug/host/JWT).
+// Devuelve null si no hay tenant (llamador debe aplicar fail-closed: [] y no global).
+export function getSchemaFromRequest(req: any): string | null {
+  const s = req?.tenant?.schema;
+  if (typeof s === 'string' && /^[a-z_][a-z0-9_]*$/i.test(s) && s !== 'cobrokits' && s !== 'public') return s;
+  return null;
+}

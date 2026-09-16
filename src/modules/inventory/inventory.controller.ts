@@ -1,6 +1,6 @@
 ﻿import { Controller, Get, Post, Patch, Delete, Query, Body, Req } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { getEmpresaIdForUser, getUserIdFromRequest, getTargetSellerIds } from '../../common/helpers/empresa.helper';
+import { getEmpresaIdForUser, getUserIdFromRequest, getTargetSellerIds, getSchemaFromRequest } from '../../common/helpers/empresa.helper';
 
 @Controller('api/inventory')
 export class InventoryController {
@@ -57,8 +57,18 @@ export class InventoryController {
   @Get()
   async list(@Query('sellerId') sellerId?: string, @Req() req?: any) {
     try {
+      const schema = getSchemaFromRequest(req);
       const userId = getUserIdFromRequest(req || {});
       const empresaId = await getEmpresaIdForUser(this.dataSource, userId as string);
+      // Tablas sin dual-write viven en cobrokits: preferir schema tenant si tiene datos,
+      // si no, caer a cobrokits filtrado por empresa (nunca global).
+      if (schema) {
+        const rows: any[] = sellerId
+          ? await this.dataSource.query(`SELECT * FROM ${schema}.seller_inventory WHERE seller_id = $1 ORDER BY created_at DESC LIMIT 100`, [sellerId])
+          : await this.dataSource.query(`SELECT * FROM ${schema}.seller_inventory ORDER BY created_at DESC LIMIT 100`);
+        if (rows.length > 0) return rows;
+        if (!empresaId) return rows; // schema vacío y sin empresa: no exponer global
+      }
       if (empresaId) {
         if (sellerId) {
           const allowed = await getTargetSellerIds(this.dataSource, userId as string);
@@ -68,10 +78,8 @@ export class InventoryController {
         const ids = await getTargetSellerIds(this.dataSource, userId as string);
         return this.dataSource.query('SELECT * FROM cobrokits.seller_inventory WHERE seller_id = ANY($1::uuid[]) ORDER BY created_at DESC LIMIT 100', [ids]);
       }
-      if (sellerId) {
-        return this.dataSource.query('SELECT * FROM cobrokits.seller_inventory WHERE seller_id = $1 ORDER BY created_at DESC LIMIT 100', [sellerId]);
-      }
-      return this.dataSource.query('SELECT * FROM cobrokits.seller_inventory ORDER BY created_at DESC LIMIT 100');
+      // fail-closed: sin tenant ni empresa no exponer inventario global
+      return [];
     } catch (e) {
       return { stub: true, module: 'inventory', table: 'seller_inventory', message: 'Tabla no inicializada o sin datos', error: (e as Error).message };
     }

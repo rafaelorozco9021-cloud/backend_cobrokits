@@ -1,5 +1,5 @@
 ﻿import { Controller, Get, Post, Patch, Delete, Query, Body, Req } from '@nestjs/common';
-import { getEmpresaIdForUser, getUserIdFromRequest, getTargetSellerIds } from '../../common/helpers/empresa.helper';
+import { getEmpresaIdForUser, getUserIdFromRequest, getTargetSellerIds, getSchemaFromRequest } from '../../common/helpers/empresa.helper';
 import { DataSource } from 'typeorm';
 
 @Controller('api/weekly-report')
@@ -9,8 +9,16 @@ export class WeeklyReportController {
   @Get()
   async list(@Query('sellerId') sellerId?: string, @Req() req?: any) {
     try {
+      const schema = getSchemaFromRequest(req);
       const userId = getUserIdFromRequest(req || {});
       const empresaId = await getEmpresaIdForUser(this.dataSource, userId as string);
+      if (schema) {
+        const rows: any[] = sellerId
+          ? await this.dataSource.query(`SELECT * FROM ${schema}.daily_seller_stock WHERE seller_id = $1 ORDER BY created_at DESC LIMIT 100`, [sellerId])
+          : await this.dataSource.query(`SELECT * FROM ${schema}.daily_seller_stock ORDER BY created_at DESC LIMIT 100`);
+        if (rows.length > 0) return rows;
+        if (!empresaId) return rows;
+      }
       if (empresaId) {
         const allowed = await getTargetSellerIds(this.dataSource, userId as string);
         if (sellerId) {
@@ -19,10 +27,7 @@ export class WeeklyReportController {
         }
         return this.dataSource.query('SELECT * FROM cobrokits.daily_seller_stock WHERE seller_id = ANY($1::uuid[]) ORDER BY created_at DESC LIMIT 100', [allowed]);
       }
-      if (sellerId) {
-        return this.dataSource.query('SELECT * FROM cobrokits.daily_seller_stock WHERE seller_id = $1 ORDER BY created_at DESC LIMIT 100', [sellerId]);
-      }
-      return this.dataSource.query('SELECT * FROM cobrokits.daily_seller_stock ORDER BY created_at DESC LIMIT 100');
+      return [];
     } catch (e) {
       return { stub: true, module: 'weekly-report', table: 'daily_seller_stock', message: 'Tabla no inicializada o sin datos', error: (e as Error).message };
     }

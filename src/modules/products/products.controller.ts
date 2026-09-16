@@ -1,6 +1,6 @@
 ﻿import { Controller, Get, Post, Patch, Delete, Query, Body, Req } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { getEmpresaIdForUser, getUserIdFromRequest } from '../../common/helpers/empresa.helper';
+import { getEmpresaIdForUser, getUserIdFromRequest, getSchemaFromRequest } from '../../common/helpers/empresa.helper';
 
 @Controller('api/products')
 export class ProductsController {
@@ -9,7 +9,7 @@ export class ProductsController {
   @Get()
   async list(@Query('sellerId') sellerId?: string, @Req() req?: any) {
     try {
-      const schema = req?.tenant?.schema;
+      const schema = getSchemaFromRequest(req);
       if (schema) {
         // Tenant físico: aislamiento total por schema
         if (sellerId) return this.dataSource.query(`SELECT * FROM ${schema}.products WHERE seller_id = $1 ORDER BY created_at DESC LIMIT 100`, [sellerId]);
@@ -21,8 +21,8 @@ export class ProductsController {
         if (sellerId) return this.dataSource.query('SELECT * FROM cobrokits.products WHERE empresa_id = $1 AND seller_id = $2 ORDER BY created_at DESC LIMIT 100', [empresaId, sellerId]);
         return this.dataSource.query('SELECT * FROM cobrokits.products WHERE empresa_id = $1 ORDER BY created_at DESC LIMIT 100', [empresaId]);
       }
-      if (sellerId) return this.dataSource.query('SELECT * FROM cobrokits.products WHERE seller_id = $1 ORDER BY created_at DESC LIMIT 100', [sellerId]);
-      return this.dataSource.query('SELECT * FROM cobrokits.products ORDER BY created_at DESC LIMIT 100');
+      // fail-closed: sin tenant ni empresa no exponer catálogo global
+      return [];
     } catch (e) {
       return { stub: true, module: 'products', table: 'products', message: 'Tabla no inicializada o sin datos', error: (e as Error).message };
     }

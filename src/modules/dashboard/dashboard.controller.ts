@@ -29,7 +29,18 @@ export class DashboardController {
     const schema = tenant?.schema || this.tenantService.getSchemaFromRequest(req);
 
     if (action === 'overview') return this.dashboardService.overview(sellerId, schema);
-    if (action === 'sellers') return this.dashboardService.sellers(schema);
+    if (action === 'sellers') {
+      // Resolver empresa del JWT para despliegues con schema compartido
+      let empresaId: string | undefined;
+      try {
+        const r: any[] = await (this.dashboardService as any).dataSource.query(
+          `SELECT id, role, empresa_id FROM cobrokits.sellers WHERE id=$1`,
+          [sellerId],
+        );
+        if (r.length) empresaId = r[0].role === 'empresa' ? r[0].id : r[0].empresa_id || r[0].id;
+      } catch {}
+      return this.dashboardService.sellers(schema, empresaId);
+    }
 
     return { error: 'Acción no válida' };
   }

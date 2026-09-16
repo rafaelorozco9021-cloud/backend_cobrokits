@@ -1,6 +1,6 @@
 ﻿import { Controller, Get, Post, Patch, Delete, Query, Body, Req } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { getEmpresaIdForUser, getUserIdFromRequest, getTargetSellerIds } from '../../common/helpers/empresa.helper';
+import { getEmpresaIdForUser, getUserIdFromRequest, getTargetSellerIds, getSchemaFromRequest } from '../../common/helpers/empresa.helper';
 
 @Controller('api/visits')
 export class VisitsController {
@@ -15,8 +15,12 @@ export class VisitsController {
     @Req() req?: any,
   ) {
     try {
+      const tenantSchema = getSchemaFromRequest(req);
+      const schema = tenantSchema || 'cobrokits';
       const userId = getUserIdFromRequest(req || {});
       const empresaId = await getEmpresaIdForUser(this.dataSource, userId as string);
+      // fail-closed: schema global sin empresa no expone visitas
+      if (!tenantSchema && !empresaId) return [];
       const cob = cobroId || cobro_id;
       const params: any[] = [];
       let idx = 1;
@@ -60,11 +64,11 @@ export class VisitsController {
           COALESCE(p.amount, 0) as abono,
           COALESCE(SUM(cvi.quantity * cvi.unit_price), 0) - COALESCE(p.amount, 0) as deuda,
           0 as anterior
-        FROM cobrokits.customer_visits cv
-        LEFT JOIN cobrokits.sellers s ON s.id = cv.seller_id
-        LEFT JOIN cobrokits.payments p ON p.visit_id = cv.id
-        LEFT JOIN cobrokits.customers c ON c.id = p.customer_id
-        LEFT JOIN cobrokits.customer_visit_items cvi ON cvi.visit_id = cv.id
+        FROM ${schema}.customer_visits cv
+        LEFT JOIN ${schema}.sellers s ON s.id = cv.seller_id
+        LEFT JOIN ${schema}.payments p ON p.visit_id = cv.id
+        LEFT JOIN ${schema}.customers c ON c.id = p.customer_id
+        LEFT JOIN ${schema}.customer_visit_items cvi ON cvi.visit_id = cv.id
         ${where}
         GROUP BY cv.id, c.id, c.name, c.phone, s.name, p.amount, p.payment_method, cv.visit_date
         ORDER BY cv.visit_date DESC

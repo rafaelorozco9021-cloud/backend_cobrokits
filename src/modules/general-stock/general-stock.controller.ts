@@ -1,5 +1,5 @@
 ﻿import { Controller, Get, Post, Patch, Delete, Query, Body, Req } from '@nestjs/common';
-import { getEmpresaIdForUser, getUserIdFromRequest, getTargetSellerIds } from '../../common/helpers/empresa.helper';
+import { getEmpresaIdForUser, getUserIdFromRequest, getSchemaFromRequest } from '../../common/helpers/empresa.helper';
 import { DataSource } from 'typeorm';
 
 @Controller('api/general-stock')
@@ -9,16 +9,20 @@ export class GeneralStockController {
   @Get()
   async list(@Query('sellerId') sellerId?: string, @Req() req?: any) {
     try {
+      const schema = getSchemaFromRequest(req);
       const userId = getUserIdFromRequest(req || {});
       const empresaId = await getEmpresaIdForUser(this.dataSource, userId as string);
+      if (schema) {
+        const rows: any[] = await this.dataSource.query(`SELECT ws.* FROM ${schema}.warehouse_stock ws ORDER BY ws.created_at DESC LIMIT 100`);
+        if (rows.length > 0) return rows;
+        if (!empresaId) return rows;
+      }
       if (empresaId) {
         // warehouse_stock se filtra por productos de la empresa
         return this.dataSource.query('SELECT ws.* FROM cobrokits.warehouse_stock ws JOIN cobrokits.products p ON p.id=ws.product_id WHERE p.empresa_id=$1 ORDER BY ws.created_at DESC LIMIT 100', [empresaId]);
       }
-      if (sellerId) {
-        return this.dataSource.query('SELECT * FROM cobrokits.warehouse_stock WHERE product_id = $1 ORDER BY created_at DESC LIMIT 100', [sellerId]);
-      }
-      return this.dataSource.query('SELECT * FROM cobrokits.warehouse_stock ORDER BY created_at DESC LIMIT 100');
+      // fail-closed
+      return [];
     } catch (e) {
       return { stub: true, module: 'general-stock', table: 'warehouse_stock', message: 'Tabla no inicializada o sin datos', error: (e as Error).message };
     }

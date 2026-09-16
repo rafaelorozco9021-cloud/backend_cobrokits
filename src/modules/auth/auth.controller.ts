@@ -29,10 +29,34 @@ export class AuthController {
   }
 
   @Get()
-  async get(@Query('action') action: string = 'list', @Query('sellerId') sellerId: string) {
+  async get(@Query('action') action: string = 'list', @Query('sellerId') sellerId: string, @Req() req?: any) {
     if (action === 'today') return this.authService.todayStats();
     if (action === 'week') return this.authService.weekStats(sellerId);
     if (action === 'lowStock') return this.authService.lowStock(sellerId || null);
+    // listSellers global solo para superadmin; empresa/seller ven solo los suyos (fail-closed)
+    const role = (req as any)?.user?.role;
+    const userId = (req as any)?.user?.userId || (req as any)?.user?.id;
+    if (role !== 'superadmin' && userId && userId !== 'admin') {
+      try {
+        const ds: any = (this.authService as any).dataSource;
+        const { getEmpresaIdForUser } = await import('../../common/helpers/empresa.helper');
+        const empresaId = await getEmpresaIdForUser(ds, userId);
+        if (empresaId) {
+          return ds.query(
+            `SELECT id, name, email, phone, status, role, empresa_id FROM cobrokits.sellers WHERE role='seller' AND empresa_id=$1 ORDER BY name`,
+            [empresaId],
+          );
+        }
+        const tenantSchema = (req as any)?.tenant?.schema;
+        if (tenantSchema && tenantSchema !== 'cobrokits' && tenantSchema !== 'public') {
+          return ds.query(`SELECT id, name, email, phone, status, role, empresa_id FROM ${tenantSchema}.sellers WHERE role='seller' ORDER BY name`);
+        }
+        return [];
+      } catch {
+        return [];
+      }
+    }
+    if (role !== 'superadmin') return [];
     return this.authService.listSellers();
   }
 

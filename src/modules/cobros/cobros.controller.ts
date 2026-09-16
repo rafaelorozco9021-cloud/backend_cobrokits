@@ -1,6 +1,6 @@
 ﻿import { Controller, Get, Post, Patch, Delete, Query, Body, Req } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { getEmpresaIdForUser, getUserIdFromRequest } from '../../common/helpers/empresa.helper';
+import { getEmpresaIdForUser, getUserIdFromRequest, getSchemaFromRequest } from '../../common/helpers/empresa.helper';
 
 @Controller('api/cobros')
 export class CobrosController {
@@ -9,9 +9,12 @@ export class CobrosController {
   @Get()
   async list(@Query('sellerId') sellerId?: string, @Query('dia') dia?: string, @Query('grupo') grupo?: string, @Req() req?: any) {
     try {
-      const schema = req?.tenant?.schema || 'cobrokits';
+      const tenantSchema = getSchemaFromRequest(req);
+      const schema = tenantSchema || 'cobrokits';
       const userId = getUserIdFromRequest(req || {});
       const empresaId = await getEmpresaIdForUser(this.dataSource, userId as string);
+      // fail-closed: schema global sin empresa identificada no expone nada
+      if (schema === 'cobrokits' && !empresaId) return [];
       const hasCobros = await this.dataSource.query(`SELECT to_regclass('${schema}.cobros') as tbl`);
       const exists = hasCobros[0]?.tbl !== null;
       if (exists) {
@@ -25,10 +28,7 @@ export class CobrosController {
         q += ` ORDER BY c.dia, c.name LIMIT 100`;
         return this.dataSource.query(q, params);
       }
-      if (sellerId) {
-        return this.dataSource.query('SELECT * FROM cobrokits.payments WHERE seller_id = $1 ORDER BY created_at DESC LIMIT 100', [sellerId]);
-      }
-      return this.dataSource.query('SELECT * FROM cobrokits.payments ORDER BY created_at DESC LIMIT 100');
+      return [];
     } catch (e) {
       return { stub: true, module: 'cobros', table: 'payments', message: 'Tabla no inicializada o sin datos', error: (e as Error).message };
     }
