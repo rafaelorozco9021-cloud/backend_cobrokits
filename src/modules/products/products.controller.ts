@@ -71,8 +71,59 @@ export class ProductsController {
   }
 
   @Patch()
-  async update(@Body() body: any) {
-    return { stub: true, module: 'products', received: body, message: 'PATCH stub' };
+  async update(@Body() body: any, @Req() req?: any) {
+    try {
+      const schema = getSchemaFromRequest(req) || 'cobrokits';
+      const id = body.id;
+      if (!id) return { success: false, error: 'Falta id' };
+      const userId = getUserIdFromRequest(req || {});
+      const empresaId = await getEmpresaIdForUser(this.dataSource, userId as string);
+      if (schema === 'cobrokits' && empresaId) {
+        const chk: any[] = await this.dataSource.query('SELECT empresa_id FROM cobrokits.products WHERE id=$1', [id]);
+        if (chk.length && chk[0].empresa_id && chk[0].empresa_id !== empresaId)
+          return { success: false, error: 'No autorizado: producto de otra empresa' };
+      }
+      const cols: any[] = await this.dataSource.query(
+        `SELECT column_name FROM information_schema.columns WHERE table_schema=$1 AND table_name='products'`,
+        [schema],
+      );
+      const names = new Set(cols.map((c) => c.column_name));
+      const sets: string[] = [];
+      const params: any[] = [];
+      let idx = 1;
+      const put = (col: string, val: any) => {
+        if (names.has(col) && val !== undefined) {
+          sets.push(`${col} = $${idx++}`);
+          params.push(val);
+        }
+      };
+      put('name', body.name);
+      put('description', body.description ?? null);
+      if (body.price !== undefined) put('price', Number(body.price));
+      if (body.pvp !== undefined) put('price', Number(body.pvp));
+      if (body.cost_price !== undefined) put('cost_price', Number(body.cost_price));
+      if (body.cost !== undefined) put('cost_price', Number(body.cost));
+      if (body.stock !== undefined) put('stock', Number(body.stock));
+      put('category', body.category);
+      put('sku', body.sku);
+      if (names.has('updated_at')) sets.push('updated_at = NOW()');
+      if (!sets.length) return { success: false, error: 'Nada para actualizar' };
+      params.push(id);
+      const rows: any[] = await this.dataSource.query(
+        `UPDATE ${schema}.products SET ${sets.join(', ')} WHERE id = $${idx} RETURNING *`,
+        params,
+      );
+      const updated = rows[0] || null;
+      if (updated && schema !== 'cobrokits') {
+        await this.dataSource.query(
+          `UPDATE cobrokits.products SET name=$2, description=$3, price=$4, cost_price=$5, category=$6, stock=$7, sku=$8 WHERE id=$1`,
+          [updated.id, updated.name, updated.description, updated.price, updated.cost_price, updated.category, updated.stock, updated.sku],
+        ).catch(() => {});
+      }
+      return updated || { success: true, id };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
   }
 
   @Delete()
