@@ -163,6 +163,71 @@ export class VisitsController {
     }
   }
 
+  @Post('abono')
+  async addAbono(@Body() body: any, @Req() req?: any) {
+    try {
+      const visitId = body.visit_id || body.visitId;
+      const amount = Number(body.amount ?? body.abono ?? 0);
+      if (!visitId) return { success: false, error: 'visit_id requerido' };
+      if (!Number.isFinite(amount) || amount <= 0) return { success: false, error: 'El abono debe ser mayor a 0' };
+      const method = String(body.payment_method || body.paymentMethod || 'efectivo').toLowerCase();
+      if (!['efectivo', 'nequi', 'transferencia', 'tarjeta'].includes(method))
+        return { success: false, error: 'Método de pago no válido' };
+      const userId = getUserIdFromRequest(req || {});
+      const empresaId = await getEmpresaIdForUser(this.dataSource, userId as string);
+      if (!empresaId) return { success: false, error: 'No se pudo determinar empresa' };
+      // Schema donde vive la visita (tenant físico si existe, si no cobrokits)
+      let schema = 'cobrokits';
+      const tenantSchema = getSchemaFromRequest(req);
+      if (tenantSchema) {
+        const t: any[] = await this.dataSource.query(`SELECT to_regclass('${tenantSchema}.customer_visits') AS tbl`);
+        if (t[0]?.tbl !== null) {
+          const found: any[] = await this.dataSource.query(`SELECT id FROM ${tenantSchema}.customer_visits WHERE id = $1`, [visitId]);
+          if (found.length) schema = tenantSchema;
+        }
+      }
+      const visit: any[] = await this.dataSource.query(
+        `SELECT id, seller_id, customer_id, cobro_id FROM ${schema}.customer_visits WHERE id = $1`,
+        [visitId],
+      );
+      if (!visit.length) return { success: false, error: 'Visita no encontrada en tu empresa' };
+      const v = visit[0];
+      // Ownership: el vendedor de la visita debe pertenecer a tu empresa
+      const s: any[] = await this.dataSource.query(`SELECT empresa_id FROM cobrokits.sellers WHERE id = $1`, [v.seller_id]);
+      if (s.length && s[0].empresa_id && s[0].empresa_id !== empresaId)
+        return { success: false, error: 'No autorizado: visita de otra empresa' };
+      const pay: any[] = await this.dataSource.query(
+        `INSERT INTO ${schema}.payments (seller_id, customer_id, visit_id, amount, payment_method, status, notes)
+         VALUES ($1, $2, $3, $4, $5, 'completed', $6) RETURNING id, amount, payment_method, created_at`,
+        [v.seller_id, v.customer_id, visitId, amount, method, body.notes || body.nota || 'Abono posterior'],
+      );
+      const hasCobroCol = (await this.dataSource.query(
+        `SELECT column_name FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'payments' AND column_name = 'cobro_id'`,
+        [schema],
+      )).length > 0;
+      if (hasCobroCol && v.cobro_id) {
+        await this.dataSource.query(`UPDATE ${schema}.payments SET cobro_id = $1 WHERE id = $2`, [v.cobro_id, pay[0].id]).catch(() => {});
+      }
+      if (schema !== 'cobrokits') {
+        await this.dataSource.query(
+          `INSERT INTO cobrokits.payments (seller_id, customer_id, visit_id, amount, payment_method, status, notes)
+           VALUES ($1, $2, $3, $4, $5, 'completed', $6)`,
+          [v.seller_id, v.customer_id, visitId, amount, method, body.notes || body.nota || 'Abono posterior'],
+        ).catch(() => {});
+      }
+      const agg: any[] = await this.dataSource.query(
+        `SELECT COALESCE((SELECT SUM(cvi.quantity * cvi.unit_price) FROM ${schema}.customer_visit_items cvi WHERE cvi.visit_id = $1), 0) AS venta,
+                COALESCE((SELECT SUM(p2.amount) FROM ${schema}.payments p2 WHERE p2.visit_id = $1), 0) AS abono`,
+        [visitId],
+      );
+      const venta = Number(agg[0]?.venta || 0);
+      const abonoTotal = Number(agg[0]?.abono || 0);
+      return { success: true, payment: pay[0], visit_id: visitId, venta, abono_total: abonoTotal, deuda: venta - abonoTotal };
+    } catch (e: any) {
+      return { success: false, error: e.message };
+    }
+  }
+
   @Patch()
   async update(@Body() body: any) {
     return { stub: true, module: 'visits', received: body, message: 'PATCH stub' };
