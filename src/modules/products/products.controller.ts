@@ -51,10 +51,22 @@ export class ProductsController {
           );
       const prodId = rows[0].id;
       if (Number(stock) > 0) {
-        await this.dataSource.query(
-          `INSERT INTO ${schema}.warehouse_stock (product_id, total_quantity, reserved_quantity, last_restock) VALUES ($1,$2,0,CURRENT_DATE) ON CONFLICT (product_id) DO UPDATE SET total_quantity = ${schema}.warehouse_stock.total_quantity + $2`,
-          [prodId, Number(stock)]
-        ).catch(()=>{});
+        // Sin ON CONFLICT: warehouse_stock puede no tener único en product_id
+        const cur: any[] = await this.dataSource.query(
+          `SELECT id FROM ${schema}.warehouse_stock WHERE product_id = $1 LIMIT 1`,
+          [prodId],
+        ).catch(() => []);
+        if (cur.length) {
+          await this.dataSource.query(
+            `UPDATE ${schema}.warehouse_stock SET total_quantity = total_quantity + $2, last_restock = CURRENT_DATE, updated_at = NOW() WHERE product_id = $1`,
+            [prodId, Number(stock)],
+          ).catch(() => {});
+        } else {
+          await this.dataSource.query(
+            `INSERT INTO ${schema}.warehouse_stock (product_id, total_quantity, reserved_quantity, last_restock) VALUES ($1,$2,0,CURRENT_DATE)`,
+            [prodId, Number(stock)],
+          ).catch(() => {});
+        }
         await this.dataSource.query(
           `INSERT INTO ${schema}.warehouse_stock_entries (product_id, quantity, notes) VALUES ($1,$2,$3)`,
           [prodId, Number(stock), 'Stock inicial']
