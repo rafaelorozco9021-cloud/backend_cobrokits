@@ -63,6 +63,7 @@ export class VisitsController {
           c.phone as cliente_phone,
           p.payment_method,
           COALESCE(SUM(cvi.quantity * cvi.unit_price), 0) as venta,
+          COALESCE(SUM(cvi.quantity * pr.cost_price), 0) as costo,
           COALESCE(p.amount, 0) as abono,
           COALESCE(SUM(cvi.quantity * cvi.unit_price), 0) - COALESCE(p.amount, 0) as deuda,
           0 as anterior
@@ -71,6 +72,7 @@ export class VisitsController {
         LEFT JOIN ${schema}.payments p ON p.visit_id = cv.id
         LEFT JOIN ${schema}.customers c ON c.id = p.customer_id
         LEFT JOIN ${schema}.customer_visit_items cvi ON cvi.visit_id = cv.id
+        LEFT JOIN ${schema}.products pr ON pr.id = cvi.product_id
         ${where}
         GROUP BY cv.id, c.id, c.name, c.phone, s.name, p.amount, p.payment_method, cv.visit_date
         ORDER BY cv.visit_date DESC
@@ -82,12 +84,13 @@ export class VisitsController {
         // Intentar sin filtro de cobro pero con sellerId y hoy
         const hoy = new Date().toISOString().split('T')[0];
         const q2 = `
-          SELECT cv.id, cv.seller_id, cv.cobro_id, cv.visit_date, s.name as vendedor, c.name as cliente, c.phone as cliente_phone, p.payment_method, COALESCE(SUM(cvi.quantity * cvi.unit_price),0) as venta, COALESCE(p.amount,0) as abono, COALESCE(SUM(cvi.quantity * cvi.unit_price),0)-COALESCE(p.amount,0) as deuda
+          SELECT cv.id, cv.seller_id, cv.cobro_id, cv.visit_date, s.name as vendedor, c.name as cliente, c.phone as cliente_phone, p.payment_method, COALESCE(SUM(cvi.quantity * cvi.unit_price),0) as venta, COALESCE(SUM(cvi.quantity * pr.cost_price),0) as costo, COALESCE(p.amount,0) as abono, COALESCE(SUM(cvi.quantity * cvi.unit_price),0)-COALESCE(p.amount,0) as deuda
           FROM cobrokits.customer_visits cv
           LEFT JOIN cobrokits.sellers s ON s.id=cv.seller_id
           LEFT JOIN cobrokits.payments p ON p.visit_id=cv.id
           LEFT JOIN cobrokits.customers c ON c.id=p.customer_id
           LEFT JOIN cobrokits.customer_visit_items cvi ON cvi.visit_id=cv.id
+          LEFT JOIN cobrokits.products pr ON pr.id = cvi.product_id
           WHERE cv.seller_id = $1 AND (cv.visit_date AT TIME ZONE 'America/Bogota')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'America/Bogota')::date
           GROUP BY cv.id, c.name, c.phone, s.name, p.amount, p.payment_method, cv.visit_date
           ORDER BY cv.visit_date DESC LIMIT 50
